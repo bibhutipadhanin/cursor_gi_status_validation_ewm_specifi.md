@@ -1,0 +1,401 @@
+---
+description: Testing standards, unit tests, and quality assurance for ECC 6.0 EHP 6 ABAP 731 SP0008
+alwaysApply: false
+globs: ["**/*test*.abap", "**/*test*.clas/**"]
+---
+
+# Testing and Quality Assurance
+
+## Target Environment
+- **SAP ECC 6.0 EHP 6**
+- **ABAP 731 SP0008**
+- ABAP Unit testing framework
+
+## ABAP Unit Testing
+
+### Test Class Structure
+
+#### Standard Test Class Template
+```abap
+*----------------------------------------------------------------------*
+* Test Class: ZCL_CUSTOMER_MANAGER_TEST
+* Description: Unit tests for ZCL_CUSTOMER_MANAGER
+*----------------------------------------------------------------------*
+
+CLASS ltc_customer_manager_test DEFINITION
+  FOR TESTING
+  DURATION SHORT
+  RISK LEVEL HARMLESS.
+
+  PRIVATE SECTION.
+    " Test data
+    DATA: lo_cut TYPE REF TO zcl_customer_manager,
+          lv_test_customer_id TYPE kunnr VALUE '0000000001',
+          lv_test_company_code TYPE bukrs VALUE '1000'.
+
+    " Test setup and teardown
+    METHODS: setup,
+             teardown.
+
+    " Test methods
+    METHODS: test_get_customer_data_success FOR TESTING,
+             test_get_customer_data_not_found FOR TESTING,
+             test_update_customer_data_success FOR TESTING,
+             test_update_customer_data_validation FOR TESTING,
+             test_authorization_check FOR TESTING.
+
+ENDCLASS.
+
+CLASS ltc_customer_manager_test IMPLEMENTATION.
+
+  METHOD setup.
+    " Create test data
+    " Setup test environment
+    CREATE OBJECT lo_cut
+      EXPORTING
+        iv_customer_id = lv_test_customer_id
+        iv_company_code = lv_test_company_code.
+  ENDMETHOD.
+
+  METHOD teardown.
+    " Cleanup test data
+    CLEAR: lo_cut.
+  ENDMETHOD.
+
+  METHOD test_get_customer_data_success.
+    " Given: Customer exists
+    DATA: ls_customer TYPE kna1.
+
+    " When: Get customer data
+    lo_cut->get_customer_data( IMPORTING es_customer = ls_customer ).
+
+    " Then: Customer data is returned
+    cl_abap_unit_assert=>assert_equals(
+      exp = lv_test_customer_id
+      act = ls_customer-kunnr
+      msg = 'Customer ID should match'
+    ).
+    
+    cl_abap_unit_assert=>assert_not_initial(
+      act = ls_customer-name1
+      msg = 'Customer name should not be empty'
+    ).
+  ENDMETHOD.
+
+  METHOD test_get_customer_data_not_found.
+    " Given: Customer does not exist
+    DATA: ls_customer TYPE kna1.
+    CREATE OBJECT lo_cut
+      EXPORTING
+        iv_customer_id = '9999999999'
+        iv_company_code = lv_test_company_code.
+
+    " When/Then: Exception is raised
+    TRY.
+        lo_cut->get_customer_data( IMPORTING es_customer = ls_customer ).
+        cl_abap_unit_assert=>fail( msg = 'Exception should be raised' ).
+      CATCH zcx_customer_not_found.
+        " Expected exception
+        cl_abap_unit_assert=>assert_true(
+          act = abap_true
+          msg = 'Exception correctly raised'
+        ).
+    ENDTRY.
+  ENDMETHOD.
+
+  METHOD test_update_customer_data_success.
+    " Given: Valid customer data
+    DATA: ls_customer TYPE kna1.
+    ls_customer-kunnr = lv_test_customer_id.
+    ls_customer-name1 = 'Test Customer Updated'.
+
+    " When: Update customer data
+    lo_cut->update_customer_data( is_customer = ls_customer ).
+
+    " Then: No exception is raised
+    " (Success is indicated by no exception)
+    cl_abap_unit_assert=>assert_true(
+      act = abap_true
+      msg = 'Update should succeed'
+    ).
+  ENDMETHOD.
+
+  METHOD test_update_customer_data_validation.
+    " Given: Invalid customer data
+    DATA: ls_customer TYPE kna1.
+    ls_customer-kunnr = ''. " Empty customer ID
+
+    " When/Then: Validation exception is raised
+    TRY.
+        lo_cut->update_customer_data( is_customer = ls_customer ).
+        cl_abap_unit_assert=>fail( msg = 'Validation exception should be raised' ).
+      CATCH zcx_validation_error.
+        " Expected exception
+        cl_abap_unit_assert=>assert_true(
+          act = abap_true
+          msg = 'Validation exception correctly raised'
+        ).
+    ENDTRY.
+  ENDMETHOD.
+
+  METHOD test_authorization_check.
+    " Given: User without authorization
+    " (Mock authorization check to return failure)
+
+    " When/Then: Authorization exception is raised
+    TRY.
+        CREATE OBJECT lo_cut
+          EXPORTING
+            iv_customer_id = lv_test_customer_id
+            iv_company_code = '9999'. " Unauthorized company code
+        
+        cl_abap_unit_assert=>fail( msg = 'Authorization exception should be raised' ).
+      CATCH zcx_authorization_error.
+        " Expected exception
+        cl_abap_unit_assert=>assert_true(
+          act = abap_true
+          msg = 'Authorization exception correctly raised'
+        ).
+    ENDTRY.
+  ENDMETHOD.
+
+ENDCLASS.
+```
+
+### Test Class Attributes
+
+#### FOR TESTING
+- Marks class as test class
+- Test methods are automatically discovered
+
+#### DURATION
+- **SHORT**: < 1 minute
+- **MEDIUM**: 1-10 minutes
+- **LONG**: > 10 minutes
+
+#### RISK LEVEL
+- **HARMLESS**: No side effects
+- **DANGEROUS**: May modify data
+- **CRITICAL**: May cause system issues
+
+### Assertion Methods
+
+#### Basic Assertions
+```abap
+" Equality check
+cl_abap_unit_assert=>assert_equals(
+  exp = expected_value
+  act = actual_value
+  msg = 'Description of assertion'
+).
+
+" Not equals
+cl_abap_unit_assert=>assert_differs(
+  exp = expected_value
+  act = actual_value
+  msg = 'Values should differ'
+).
+
+" Initial check
+cl_abap_unit_assert=>assert_initial(
+  act = actual_value
+  msg = 'Value should be initial'
+).
+
+" Not initial check
+cl_abap_unit_assert=>assert_not_initial(
+  act = actual_value
+  msg = 'Value should not be initial'
+).
+
+" True check
+cl_abap_unit_assert=>assert_true(
+  act = condition
+  msg = 'Condition should be true'
+).
+
+" False check
+cl_abap_unit_assert=>assert_false(
+  act = condition
+  msg = 'Condition should be false'
+).
+
+" Bound check (for object references)
+cl_abap_unit_assert=>assert_bound(
+  act = lo_object
+  msg = 'Object should be bound'
+).
+
+" Not bound check
+cl_abap_unit_assert=>assert_not_bound(
+  act = lo_object
+  msg = 'Object should not be bound'
+).
+
+" Substring contains
+cl_abap_unit_assert=>assert_contains(
+  exp = 'substring'
+  act = full_string
+  msg = 'String should contain substring'
+).
+
+" Table equality
+cl_abap_unit_assert=>assert_equals(
+  exp = lt_expected_table
+  act = lt_actual_table
+  msg = 'Tables should be equal'
+).
+```
+
+### Test Data Management
+
+#### Test Fixtures
+```abap
+CLASS ltc_customer_manager_test DEFINITION.
+  PRIVATE SECTION.
+    METHODS: create_test_customer
+               RETURNING VALUE(rv_customer_id) TYPE kunnr,
+             delete_test_customer
+               IMPORTING iv_customer_id TYPE kunnr,
+             create_test_data,
+             cleanup_test_data.
+ENDCLASS.
+
+CLASS ltc_customer_manager_test IMPLEMENTATION.
+
+  METHOD create_test_customer.
+    DATA: ls_customer TYPE kna1.
+    ls_customer-kunnr = 'TEST000001'.
+    ls_customer-name1 = 'Test Customer'.
+    ls_customer-bukrs = '1000'.
+    
+    INSERT kna1 FROM ls_customer.
+    rv_customer_id = ls_customer-kunnr.
+  ENDMETHOD.
+
+  METHOD delete_test_customer.
+    DELETE FROM kna1 WHERE kunnr = iv_customer_id.
+  ENDMETHOD.
+
+  METHOD create_test_data.
+    " Create all test data needed
+    create_test_customer( ).
+  ENDMETHOD.
+
+  METHOD cleanup_test_data.
+    " Cleanup all test data
+    delete_test_customer( iv_customer_id = 'TEST000001' ).
+  ENDMETHOD.
+
+ENDCLASS.
+```
+
+## Test Coverage
+
+### Coverage Requirements
+- **Minimum 80% code coverage** for production code
+- Test all public methods
+- Test all exception paths
+- Test boundary conditions
+- Test error scenarios
+
+### Coverage Analysis
+- Use Code Inspector (SCI) for coverage analysis
+- Run ABAP Unit tests regularly
+- Monitor coverage metrics
+- Increase coverage for critical code paths
+
+## Integration Testing
+
+### Test Scenarios
+```abap
+CLASS ltc_integration_test DEFINITION
+  FOR TESTING
+  DURATION MEDIUM
+  RISK LEVEL DANGEROUS.
+
+  PRIVATE SECTION.
+    METHODS: test_end_to_end_workflow FOR TESTING,
+             test_multiple_customer_processing FOR TESTING.
+ENDCLASS.
+
+CLASS ltc_integration_test IMPLEMENTATION.
+
+  METHOD test_end_to_end_workflow.
+    " Test complete workflow
+    " 1. Create customer
+    " 2. Update customer
+    " 3. Validate customer
+    " 4. Delete customer
+  ENDMETHOD.
+
+ENDCLASS.
+```
+
+## Code Quality Checks
+
+### Code Inspector (SCI)
+
+#### Standard Checks
+- Syntax checks
+- Performance checks
+- Security checks
+- Maintainability checks
+- Naming convention checks
+
+#### Custom Checks
+- Create custom checks for project-specific rules
+- Run Code Inspector before transport
+- Fix all critical and high-priority findings
+
+### ABAP Test Cockpit (ATC)
+
+#### Usage
+- Run ATC checks before transport
+- Fix all findings
+- Document exceptions (if any)
+- Maintain quality gates
+
+## Best Practices
+
+### Test Naming
+- Test classes: `ltc_<class_name>_test`
+- Test methods: `test_<method_name>_<scenario>`
+- Use descriptive names that explain what is being tested
+
+### Test Organization
+- One test class per class under test
+- Group related tests together
+- Use setup/teardown for common initialization
+- Keep tests independent (no dependencies between tests)
+
+### Test Data
+- Use test-specific data (prefix with TEST)
+- Clean up test data after tests
+- Don't use production data in tests
+- Create test data in setup, cleanup in teardown
+
+### Test Assertions
+- One assertion per test (when possible)
+- Use descriptive assertion messages
+- Test both positive and negative scenarios
+- Test boundary conditions
+
+### Mocking and Stubbing
+- Mock external dependencies
+- Use test doubles for database access
+- Isolate unit under test
+- Test in isolation
+
+## Quality Checklist
+
+- [ ] Unit tests written for all public methods
+- [ ] Exception paths are tested
+- [ ] Boundary conditions are tested
+- [ ] Test coverage is at least 80%
+- [ ] Code Inspector checks pass
+- [ ] ATC checks pass
+- [ ] Tests are independent and repeatable
+- [ ] Test data is properly managed
+- [ ] Tests are well-documented
+- [ ] Integration tests cover critical workflows

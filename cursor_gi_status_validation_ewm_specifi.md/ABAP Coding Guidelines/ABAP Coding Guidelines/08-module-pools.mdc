@@ -1,0 +1,1423 @@
+---
+description: Standards for ABAP module pools and screen-based programs in ECC 6.0 EHP 6
+alwaysApply: false
+globs: ["**/*.abap", "**/*.dynp", "**/*.dynp.*"]
+---
+
+# Module Pools and Screen-Based Programs
+
+## Target Environment
+- **SAP ECC 6.0 EHP 6**
+- **ABAP 731 SP0008**
+- Production-ready, enterprise-grade code
+
+## Module Pool Structure
+
+### Required Components
+1. **PROGRAM statement** with program name (ZP_ or YP_ prefix)
+2. **Program description** in comment block
+3. **Type pools** (if needed)
+4. **Global data declarations** (all at top)
+5. **Screen definitions** (dynpros)
+6. **Screen flow logic** (PBO/PAI modules)
+7. **Status and menu handling** (GUI status)
+8. **Transaction code** assignment
+9. **Error handling** throughout
+10. **Authorization checks** before data access
+
+### Standard Module Pool Template
+
+#### Main Program
+```abap
+PROGRAM zp_customer_maintenance.
+
+*----------------------------------------------------------------------*
+* Program: ZP_CUSTOMER_MAINTENANCE
+* Description: Customer master data maintenance transaction
+* Author: Development Team
+* Date: YYYY-MM-DD
+* Transport: <Transport Number>
+* Transaction: ZCUST (or Z_CUSTOMER)
+*----------------------------------------------------------------------*
+* Change History:
+* Date       | Author      | Description
+* YYYY-MM-DD | Name        | Initial creation
+*----------------------------------------------------------------------*
+
+" Type pools
+TYPE-POOLS: icon.
+
+" Global data declarations
+DATA: gv_customer_id TYPE kunnr,
+      gv_company_code TYPE bukrs,
+      gs_customer TYPE kna1,
+      gv_mode TYPE char1, " 'C' = Create, 'D' = Display, 'E' = Edit
+      gv_changed TYPE abap_bool,
+      go_customer_manager TYPE REF TO zcl_customer_manager,
+      lx_error TYPE REF TO zcx_customer_error.
+
+" Constants
+CONSTANTS: gc_mode_create TYPE char1 VALUE 'C',
+           gc_mode_display TYPE char1 VALUE 'D',
+           gc_mode_edit TYPE char1 VALUE 'E'.
+
+" Include for screen flow logic modules
+INCLUDE zp_customer_maintenance_o01. " PBO modules
+INCLUDE zp_customer_maintenance_i01. " PAI modules
+INCLUDE zp_customer_maintenance_f01. " Form routines
+
+" Initialization
+INITIALIZATION.
+  PERFORM init_defaults.
+
+" Start of selection (entry point)
+START-OF-SELECTION.
+  PERFORM check_authorization.
+  PERFORM init_screen.
+  CALL SCREEN 0100.
+
+" Form routines
+FORM init_defaults.
+  gv_company_code = p_bukrs.
+  gv_mode = gc_mode_display.
+ENDFORM.
+
+FORM check_authorization.
+  AUTHORITY-CHECK OBJECT 'F_KNA1_BUK'
+    ID 'ACTVT' FIELD '03'
+    ID 'BUKRS' FIELD gv_company_code.
+  
+  IF sy-subrc <> 0.
+    MESSAGE e001(z_customer_msg) WITH gv_company_code.
+    LEAVE PROGRAM.
+  ENDIF.
+ENDFORM.
+
+FORM init_screen.
+  " Initialize screen data
+  IF gv_customer_id IS NOT INITIAL.
+    PERFORM load_customer_data.
+  ENDIF.
+ENDFORM.
+
+FORM load_customer_data.
+  DATA: lx_error TYPE REF TO zcx_customer_error.
+
+  TRY.
+      IF go_customer_manager IS NOT BOUND.
+        CREATE OBJECT go_customer_manager
+          EXPORTING
+            iv_customer_id = gv_customer_id
+            iv_company_code = gv_company_code.
+      ENDIF.
+
+      go_customer_manager->get_customer_data(
+        IMPORTING es_customer = gs_customer
+      ).
+      
+    CATCH zcx_customer_error INTO lx_error.
+      MESSAGE lx_error->get_text( ) TYPE 'E'.
+      LEAVE TO SCREEN 0.
+  ENDTRY.
+ENDFORM.
+```
+
+#### PBO Module (Process Before Output)
+```abap
+*----------------------------------------------------------------------*
+* Include: ZP_CUSTOMER_MAINTENANCE_O01
+* Description: PBO modules for screen 0100
+*----------------------------------------------------------------------*
+
+MODULE status_0100 OUTPUT.
+  SET PF-STATUS 'MAIN'.
+  SET TITLEBAR 'TITLE_0100'.
+  
+  PERFORM set_screen_fields.
+ENDMODULE.
+
+MODULE set_screen_fields OUTPUT.
+  " Set field attributes based on mode
+  LOOP AT SCREEN.
+    CASE gv_mode.
+      WHEN gc_mode_display.
+        " Make all fields display-only
+        screen-input = 0.
+      WHEN gc_mode_edit.
+        " Enable input fields
+        screen-input = 1.
+      WHEN gc_mode_create.
+        " Enable input fields, clear values
+        screen-input = 1.
+        IF screen-name = 'GV_CUSTOMER_ID'.
+          screen-input = 0. " Customer ID is auto-generated
+        ENDIF.
+    ENDCASE.
+    
+    MODIFY SCREEN.
+  ENDLOOP.
+ENDMODULE.
+```
+
+#### PAI Module (Process After Input)
+```abap
+*----------------------------------------------------------------------*
+* Include: ZP_CUSTOMER_MAINTENANCE_I01
+* Description: PAI modules for screen 0100
+*----------------------------------------------------------------------*
+
+MODULE user_command_0100 INPUT.
+  CASE sy-ucomm.
+    WHEN 'BACK' OR 'CANCEL'.
+      PERFORM check_unsaved_changes.
+      IF sy-subrc = 0.
+        LEAVE TO SCREEN 0.
+      ENDIF.
+      
+    WHEN 'SAVE'.
+      PERFORM save_customer_data.
+      
+    WHEN 'EDIT'.
+      gv_mode = gc_mode_edit.
+      SET SCREEN 0100.
+      
+    WHEN 'CREATE'.
+      PERFORM create_new_customer.
+      
+    WHEN 'DELETE'.
+      PERFORM delete_customer.
+      
+    WHEN OTHERS.
+      " Handle other commands
+  ENDCASE.
+ENDMODULE.
+
+MODULE validate_input INPUT.
+  " Field-level validation
+  IF gs_customer-kunnr IS INITIAL AND gv_mode <> gc_mode_create.
+    MESSAGE e001(z_customer_msg) WITH 'Customer ID is mandatory'.
+  ENDIF.
+
+  IF gs_customer-name1 IS INITIAL.
+    MESSAGE e002(z_customer_msg) WITH 'Customer name is mandatory'.
+  ENDIF.
+ENDMODULE.
+
+MODULE check_unsaved_changes INPUT.
+  IF gv_changed = abap_true.
+    DATA: lv_answer TYPE c.
+    CALL FUNCTION 'POPUP_TO_CONFIRM'
+      EXPORTING
+        text_question = 'Unsaved changes will be lost. Continue?'
+        text_button_1 = 'Yes'
+        text_button_2 = 'No'
+        default_button = '2'
+      IMPORTING
+        answer = lv_answer.
+    
+    IF lv_answer = '2'.
+      CLEAR sy-ucomm.
+    ENDIF.
+  ENDIF.
+ENDMODULE.
+```
+
+#### Form Routines Include
+```abap
+*----------------------------------------------------------------------*
+* Include: ZP_CUSTOMER_MAINTENANCE_F01
+* Description: Form routines for customer maintenance
+*----------------------------------------------------------------------*
+
+FORM save_customer_data.
+  DATA: lx_error TYPE REF TO zcx_customer_error,
+        lx_validation TYPE REF TO zcx_validation_error.
+
+  " Validate input
+  PERFORM validate_customer_data.
+  IF sy-subrc <> 0.
+    RETURN.
+  ENDIF.
+
+  TRY.
+      IF go_customer_manager IS NOT BOUND.
+        CREATE OBJECT go_customer_manager
+          EXPORTING
+            iv_customer_id = gs_customer-kunnr
+            iv_company_code = gv_company_code.
+      ENDIF.
+
+      go_customer_manager->update_customer_data(
+        is_customer = gs_customer
+      ).
+      
+      MESSAGE s001(z_customer_msg) WITH 'Customer saved successfully'.
+      gv_changed = abap_false.
+      gv_mode = gc_mode_display.
+      
+    CATCH zcx_validation_error INTO lx_validation.
+      MESSAGE lx_validation->get_text( ) TYPE 'E'.
+      
+    CATCH zcx_customer_error INTO lx_error.
+      MESSAGE lx_error->get_text( ) TYPE 'E'.
+  ENDTRY.
+ENDFORM.
+
+FORM validate_customer_data.
+  IF gs_customer-name1 IS INITIAL.
+    MESSAGE e001(z_customer_msg) WITH 'Customer name is mandatory'.
+    RETURN.
+  ENDIF.
+
+  IF gs_customer-ort01 IS INITIAL.
+    MESSAGE e002(z_customer_msg) WITH 'City is mandatory'.
+    RETURN.
+  ENDIF.
+ENDFORM.
+
+FORM create_new_customer.
+  CLEAR: gs_customer, gv_customer_id.
+  gv_mode = gc_mode_create.
+  gv_changed = abap_false.
+  
+  " Set default values
+  gs_customer-bukrs = gv_company_code.
+  gs_customer-land1 = 'US'. " Default country
+  
+  SET SCREEN 0100.
+ENDFORM.
+
+FORM delete_customer.
+  DATA: lv_answer TYPE c,
+        lx_error TYPE REF TO zcx_customer_error.
+
+  CALL FUNCTION 'POPUP_TO_CONFIRM'
+    EXPORTING
+      text_question = 'Are you sure you want to delete this customer?'
+      text_button_1 = 'Yes'
+      text_button_2 = 'No'
+      default_button = '2'
+    IMPORTING
+      answer = lv_answer.
+
+  IF lv_answer <> '1'.
+    RETURN.
+  ENDIF.
+
+  TRY.
+      IF go_customer_manager IS NOT BOUND.
+        CREATE OBJECT go_customer_manager
+          EXPORTING
+            iv_customer_id = gs_customer-kunnr
+            iv_company_code = gv_company_code.
+      ENDIF.
+
+      go_customer_manager->delete_customer( ).
+      
+      MESSAGE s003(z_customer_msg) WITH 'Customer deleted successfully'.
+      LEAVE TO SCREEN 0.
+      
+    CATCH zcx_customer_error INTO lx_error.
+      MESSAGE lx_error->get_text( ) TYPE 'E'.
+  ENDTRY.
+ENDFORM.
+```
+
+## Screen Design Standards
+
+### Screen Layout
+- Use logical grouping of fields
+- Use subscreens for complex screens
+- Maintain consistent field positioning
+- Use appropriate field types (input, output, checkbox, etc.)
+- Group related fields with frames
+
+### Screen Attributes
+- Set appropriate screen number (0100, 0200, etc.)
+- Define screen type (normal, subscreen, modal dialog)
+- Set screen size appropriately
+- Use screen variants when applicable
+
+### Field Attributes
+- Set field attributes dynamically in PBO
+- Use LOOP AT SCREEN for field control
+- Set appropriate field types (input, output, required, etc.)
+- Use field groups for related fields
+
+## Screen Flow Logic Standards
+
+### PBO (Process Before Output) Modules
+
+#### Naming Convention
+- Module names: `status_<screen_number>` for status setting
+- Module names: `set_<purpose>_<screen_number>` for field setup
+- Use descriptive names indicating purpose
+
+#### Best Practices
+- Always set PF-STATUS and TITLEBAR in status module
+- Set field attributes in separate modules
+- Keep PBO modules focused and small
+- Use LOOP AT SCREEN for dynamic field control
+- Check authorization in PBO if needed
+
+### PAI (Process After Input) Modules
+
+#### Naming Convention
+- Module names: `user_command_<screen_number>` for command handling
+- Module names: `validate_<field_group>_<screen_number>` for validation
+- Use descriptive names indicating purpose
+
+#### Best Practices
+- Handle all user commands in user_command module
+- Validate input in separate validation modules
+- Check SY-UCOMM for user commands
+- Use field-level validation modules
+- Handle errors appropriately
+
+### MODULE Statement Rules
+- **NEVER use Native SQL** in modules - Always use Open SQL only
+- Keep modules small and focused
+- One module = one logical operation
+- Use form routines for complex logic
+- Always handle exceptions
+
+## GUI Status and Menu
+
+### Status Definition
+- Create GUI status in SE41
+- Use meaningful status names (e.g., 'MAIN', 'EDIT', 'DISPLAY')
+- Define appropriate function codes
+- Set appropriate icons and text
+
+### Function Codes
+- Use standard function codes: 'BACK', 'CANCEL', 'EXIT', 'SAVE', etc.
+- Use custom function codes: 'CREATE', 'EDIT', 'DELETE', etc.
+- Document all function codes
+- Handle all function codes in user_command module
+
+### Menu Structure
+- Organize menus logically
+- Group related functions together
+- Use separators appropriately
+- Provide keyboard shortcuts
+
+## Transaction Code Setup
+
+### Transaction Code Creation
+- Create transaction in SE93
+- Use Z_ or Y_ prefix for transaction codes
+- Link to module pool program
+- Set appropriate start screen
+- Configure skip initial screen if needed
+
+### Transaction Attributes
+- Set transaction type (Dialog transaction)
+- Set authorization object if required
+- Set appropriate transaction text
+- Configure transaction variants if needed
+
+## Data Handling
+
+### Global Data
+- Declare all global data at program level
+- Use appropriate prefixes (gv_, gs_, gt_)
+- Initialize data in INITIALIZATION
+- Clear data appropriately
+
+### Screen Data
+- Use global structures for screen fields
+- Map screen fields to data structures
+- Use field symbols for dynamic access
+- Handle data conversion appropriately
+
+### Data Validation
+- Validate in PAI modules
+- Use field-level validation
+- Provide immediate feedback
+- Use MESSAGE statement appropriately
+
+## Error Handling
+
+### Screen-Level Errors
+```abap
+MODULE validate_customer_id INPUT.
+  IF gs_customer-kunnr IS INITIAL.
+    MESSAGE e001(z_customer_msg) WITH 'Customer ID is mandatory'.
+  ENDIF.
+ENDMODULE.
+```
+
+### Exception Handling
+```abap
+FORM save_customer_data.
+  DATA: lx_error TYPE REF TO zcx_customer_error.
+
+  TRY.
+      go_customer_manager->update_customer_data(
+        is_customer = gs_customer
+      ).
+      
+    CATCH zcx_customer_error INTO lx_error.
+      MESSAGE lx_error->get_text( ) TYPE 'E'.
+      RETURN.
+  ENDTRY.
+ENDFORM.
+```
+
+### Error Recovery
+- Provide clear error messages
+- Allow user to correct errors
+- Maintain screen state on errors
+- Log errors appropriately
+
+## Authorization Checks
+
+### Screen-Level Authorization
+```abap
+MODULE check_authorization_0100 OUTPUT.
+  AUTHORITY-CHECK OBJECT 'F_KNA1_BUK'
+    ID 'ACTVT' FIELD '03'
+    ID 'BUKRS' FIELD gv_company_code.
+  
+  IF sy-subrc <> 0.
+    MESSAGE e001(z_customer_msg) WITH gv_company_code.
+    LEAVE TO SCREEN 0.
+  ENDIF.
+ENDMODULE.
+```
+
+### Field-Level Authorization
+```abap
+MODULE set_field_authorization OUTPUT.
+  LOOP AT SCREEN.
+    IF screen-name = 'GS_CUSTOMER-BUKRS'.
+      AUTHORITY-CHECK OBJECT 'F_BKPF_BUK'
+        ID 'ACTVT' FIELD '02'
+        ID 'BUKRS' FIELD gs_customer-bukrs.
+      
+      IF sy-subrc <> 0.
+        screen-input = 0.
+        screen-display_only = 1.
+      ENDIF.
+    ENDIF.
+    
+    MODIFY SCREEN.
+  ENDLOOP.
+ENDMODULE.
+```
+
+## Container-Based OOPS ALV
+
+### Overview
+Container-based OOPS ALV allows embedding ALV grids within module pool screens using GUI containers. This provides interactive, editable grids with full event handling capabilities.
+
+### Container Types
+
+#### CL_GUI_CUSTOM_CONTAINER
+- Used for embedding ALV in a specific screen area
+- Requires a custom control on the screen
+- Fixed position and size
+
+#### CL_GUI_DOCKING_CONTAINER
+- Docking container that can be resized by user
+- More flexible than custom container
+- Can be docked to screen edges
+
+### Standard ALV Container Implementation
+
+#### Global Data Declarations
+```abap
+" ALV Container and Grid
+DATA: go_container TYPE REF TO cl_gui_custom_container,
+      go_alv_grid TYPE REF TO cl_gui_alv_grid,
+      gv_container_name TYPE scrfname VALUE 'CC_ALV'.
+
+" ALV Data
+DATA: gt_customers TYPE STANDARD TABLE OF kna1,
+      gs_customer TYPE kna1,
+      gt_fieldcatalog TYPE lvc_t_fcat,
+      gs_fieldcatalog TYPE lvc_s_fcat,
+      gs_layout TYPE lvc_s_layo,
+      gs_variant TYPE disvariant.
+
+" ALV Event Handlers
+DATA: go_event_handler TYPE REF TO lcl_alv_event_handler.
+
+" ALV Exclude Toolbar Functions
+DATA: gt_exclude TYPE ui_functions.
+```
+
+#### Screen Setup
+- Add custom control to screen (e.g., `CC_ALV`)
+- Set custom control name in screen attributes
+- Position container appropriately on screen
+
+#### PBO Module for ALV Creation
+```abap
+MODULE create_alv_container OUTPUT.
+  " Create container if not exists
+  IF go_container IS NOT BOUND.
+    CREATE OBJECT go_container
+      EXPORTING
+        container_name = gv_container_name
+      EXCEPTIONS
+        cntl_error = 1
+        cntl_system_error = 2
+        create_error = 3
+        lifetime_error = 4
+        lifetime_dynpro_dynpro_link = 5
+        OTHERS = 6.
+
+    IF sy-subrc <> 0.
+      MESSAGE e001(z_alv_msg) WITH 'Error creating container'.
+      RETURN.
+    ENDIF.
+  ENDIF.
+
+  " Create ALV grid if not exists
+  IF go_alv_grid IS NOT BOUND.
+    CREATE OBJECT go_alv_grid
+      EXPORTING
+        i_parent = go_container
+      EXCEPTIONS
+        error_cntl_create = 1
+        error_cntl_init = 2
+        error_cntl_link = 3
+        error_dp_create = 4
+        OTHERS = 5.
+
+    IF sy-subrc <> 0.
+      MESSAGE e002(z_alv_msg) WITH 'Error creating ALV grid'.
+      RETURN.
+    ENDIF.
+
+    " Setup ALV
+    PERFORM setup_alv_grid.
+  ENDIF.
+
+  " Refresh ALV if data changed
+  IF gv_data_changed = abap_true.
+    PERFORM refresh_alv_display.
+    gv_data_changed = abap_false.
+  ENDIF.
+ENDMODULE.
+```
+
+#### ALV Setup Form
+```abap
+FORM setup_alv_grid.
+  DATA: lx_error TYPE REF TO cx_root.
+
+  TRY.
+      " Build field catalog
+      PERFORM build_fieldcatalog.
+
+      " Setup layout
+      PERFORM setup_layout.
+
+      " Setup variant
+      PERFORM setup_variant.
+
+      " Register events
+      PERFORM register_alv_events.
+
+      " Set toolbar exclusions
+      PERFORM set_toolbar_exclusions.
+
+      " Display ALV
+      PERFORM display_alv_grid.
+
+    CATCH cx_root INTO lx_error.
+      MESSAGE lx_error->get_text( ) TYPE 'E'.
+  ENDTRY.
+ENDFORM.
+
+FORM build_fieldcatalog.
+  DATA: ls_fieldcatalog TYPE lvc_s_fcat.
+
+  " Clear existing catalog
+  CLEAR: gt_fieldcatalog.
+
+  " Customer Number
+  CLEAR ls_fieldcatalog.
+  ls_fieldcatalog-fieldname = 'KUNNR'.
+  ls_fieldcatalog-ref_table = 'KNA1'.
+  ls_fieldcatalog-ref_field = 'KUNNR'.
+  ls_fieldcatalog-coltext = 'Customer Number'.
+  ls_fieldcatalog-scrtext_s = 'Cust. No.'.
+  ls_fieldcatalog-scrtext_m = 'Customer Number'.
+  ls_fieldcatalog-scrtext_l = 'Customer Number'.
+  ls_fieldcatalog-outputlen = 10.
+  ls_fieldcatalog-key = abap_true.
+  APPEND ls_fieldcatalog TO gt_fieldcatalog.
+
+  " Customer Name
+  CLEAR ls_fieldcatalog.
+  ls_fieldcatalog-fieldname = 'NAME1'.
+  ls_fieldcatalog-ref_table = 'KNA1'.
+  ls_fieldcatalog-ref_field = 'NAME1'.
+  ls_fieldcatalog-coltext = 'Customer Name'.
+  ls_fieldcatalog-scrtext_s = 'Name'.
+  ls_fieldcatalog-scrtext_m = 'Customer Name'.
+  ls_fieldcatalog-scrtext_l = 'Customer Name'.
+  ls_fieldcatalog-outputlen = 35.
+  ls_fieldcatalog-edit = abap_true. " Editable field
+  APPEND ls_fieldcatalog TO gt_fieldcatalog.
+
+  " City
+  CLEAR ls_fieldcatalog.
+  ls_fieldcatalog-fieldname = 'ORT01'.
+  ls_fieldcatalog-ref_table = 'KNA1'.
+  ls_fieldcatalog-ref_field = 'ORT01'.
+  ls_fieldcatalog-coltext = 'City'.
+  ls_fieldcatalog-scrtext_s = 'City'.
+  ls_fieldcatalog-scrtext_m = 'City'.
+  ls_fieldcatalog-scrtext_l = 'City'.
+  ls_fieldcatalog-outputlen = 35.
+  ls_fieldcatalog-edit = abap_true.
+  APPEND ls_fieldcatalog TO gt_fieldcatalog.
+
+  " Postal Code
+  CLEAR ls_fieldcatalog.
+  ls_fieldcatalog-fieldname = 'PSTLZ'.
+  ls_fieldcatalog-ref_table = 'KNA1'.
+  ls_fieldcatalog-ref_field = 'PSTLZ'.
+  ls_fieldcatalog-coltext = 'Postal Code'.
+  ls_fieldcatalog-scrtext_s = 'P.Code'.
+  ls_fieldcatalog-scrtext_m = 'Postal Code'.
+  ls_fieldcatalog-scrtext_l = 'Postal Code'.
+  ls_fieldcatalog-outputlen = 10.
+  ls_fieldcatalog-edit = abap_true.
+  APPEND ls_fieldcatalog TO gt_fieldcatalog.
+
+  " Country
+  CLEAR ls_fieldcatalog.
+  ls_fieldcatalog-fieldname = 'LAND1'.
+  ls_fieldcatalog-ref_table = 'KNA1'.
+  ls_fieldcatalog-ref_field = 'LAND1'.
+  ls_fieldcatalog-coltext = 'Country'.
+  ls_fieldcatalog-scrtext_s = 'Country'.
+  ls_fieldcatalog-scrtext_m = 'Country'.
+  ls_fieldcatalog-scrtext_l = 'Country'.
+  ls_fieldcatalog-outputlen = 3.
+  ls_fieldcatalog-edit = abap_true.
+  APPEND ls_fieldcatalog TO gt_fieldcatalog.
+ENDFORM.
+
+FORM setup_layout.
+  CLEAR gs_layout.
+
+  " Layout settings
+  gs_layout-zebra = abap_true. " Zebra striping
+  gs_layout-cwidth_opt = abap_true. " Optimize column width
+  gs_layout-sel_mode = 'A'. " Selection mode: A = multiple, B = single, C = none
+  gs_layout-grid_title = 'Customer List'. " Grid title
+  gs_layout-smalltitle = abap_true. " Small title
+  gs_layout-tooltip_expr = abap_true. " Tooltips
+  gs_layout-edit = abap_true. " Enable editing
+  gs_layout-stylefname = 'CELLSTYLE'. " Cell style field (if used)
+ENDFORM.
+
+FORM setup_variant.
+  CLEAR gs_variant.
+
+  " Variant settings
+  gs_variant-report = sy-repid.
+  gs_variant-handle = 'DEFAULT'.
+  gs_variant-username = sy-uname.
+ENDFORM.
+
+FORM set_toolbar_exclusions.
+  DATA: ls_exclude TYPE ui_func.
+
+  CLEAR: gt_exclude.
+
+  " Exclude specific toolbar functions
+  ls_exclude = cl_gui_alv_grid=>mc_fc_loc_copy.
+  APPEND ls_exclude TO gt_exclude.
+
+  ls_exclude = cl_gui_alv_grid=>mc_fc_loc_cut.
+  APPEND ls_exclude TO gt_exclude.
+
+  ls_exclude = cl_gui_alv_grid=>mc_fc_loc_paste.
+  APPEND ls_exclude TO gt_exclude.
+
+  ls_exclude = cl_gui_alv_grid=>mc_fc_loc_undo.
+  APPEND ls_exclude TO gt_exclude.
+ENDFORM.
+
+FORM display_alv_grid.
+  DATA: lx_error TYPE REF TO cx_root.
+
+  TRY.
+      go_alv_grid->set_table_for_first_display(
+        EXPORTING
+          is_layout = gs_layout
+          is_variant = gs_variant
+          i_save = 'A' " Save variant: A = user, U = user default, X = global
+          it_toolbar_excluding = gt_exclude
+        CHANGING
+          it_outtab = gt_customers
+          it_fieldcatalog = gt_fieldcatalog
+        EXCEPTIONS
+          invalid_parameter_combination = 1
+          program_error = 2
+          too_many_lines = 3
+          OTHERS = 4
+      ).
+
+      IF sy-subrc <> 0.
+        MESSAGE e003(z_alv_msg) WITH 'Error displaying ALV grid'.
+        RETURN.
+      ENDIF.
+
+    CATCH cx_root INTO lx_error.
+      MESSAGE lx_error->get_text( ) TYPE 'E'.
+  ENDTRY.
+ENDFORM.
+
+FORM refresh_alv_display.
+  DATA: ls_stable TYPE lvc_s_stbl.
+
+  CHECK go_alv_grid IS BOUND.
+
+  " Stable refresh (maintain scroll position)
+  ls_stable-row = abap_true.
+  ls_stable-col = abap_true.
+
+  go_alv_grid->refresh_table_display(
+    EXPORTING
+      is_stable = ls_stable
+    EXCEPTIONS
+      finished = 1
+      OTHERS = 2
+  ).
+
+  IF sy-subrc <> 0.
+    " Handle error
+  ENDIF.
+ENDFORM.
+```
+
+#### Event Registration
+```abap
+FORM register_alv_events.
+  DATA: lo_events TYPE REF TO cl_gui_alv_grid.
+
+  CHECK go_alv_grid IS BOUND.
+
+  " Get event handler
+  lo_events = go_alv_grid.
+
+  " Register event handlers
+  SET HANDLER:
+    handle_toolbar FOR lo_events,
+    handle_user_command FOR lo_events,
+    handle_data_changed FOR lo_events,
+    handle_data_changed_finished FOR lo_events,
+    handle_double_click FOR lo_events,
+    handle_hotspot_click FOR lo_events,
+    handle_button_click FOR lo_events,
+    handle_onf1 FOR lo_events.
+ENDFORM.
+```
+
+#### Event Handler Class
+```abap
+*----------------------------------------------------------------------*
+* Local Class: LCL_ALV_EVENT_HANDLER
+* Description: Event handler for ALV grid
+*----------------------------------------------------------------------*
+
+CLASS lcl_alv_event_handler DEFINITION.
+  PUBLIC SECTION.
+    METHODS:
+      handle_toolbar
+        FOR EVENT toolbar OF cl_gui_alv_grid
+        IMPORTING e_object e_interactive,
+      
+      handle_user_command
+        FOR EVENT user_command OF cl_gui_alv_grid
+        IMPORTING e_ucomm,
+      
+      handle_data_changed
+        FOR EVENT data_changed OF cl_gui_alv_grid
+        IMPORTING er_data_changed e_onf4 e_onf4_before e_onf4_after
+                  e_ucomm sender,
+      
+      handle_data_changed_finished
+        FOR EVENT data_changed_finished OF cl_gui_alv_grid
+        IMPORTING e_modified et_good_cells,
+      
+      handle_double_click
+        FOR EVENT double_click OF cl_gui_alv_grid
+        IMPORTING e_row e_column es_row_no,
+      
+      handle_hotspot_click
+        FOR EVENT hotspot_click OF cl_gui_alv_grid
+        IMPORTING e_row_id e_column_id es_row_no,
+      
+      handle_button_click
+        FOR EVENT button_click OF cl_gui_alv_grid
+        IMPORTING es_col_id es_row_no,
+      
+      handle_onf1
+        FOR EVENT onf1 OF cl_gui_alv_grid
+        IMPORTING e_fieldname es_row_no er_event_data.
+ENDCLASS.
+
+CLASS lcl_alv_event_handler IMPLEMENTATION.
+
+  METHOD handle_toolbar.
+    DATA: ls_toolbar TYPE stb_button.
+
+    " Add custom toolbar button
+    CLEAR ls_toolbar.
+    ls_toolbar-function = 'Z_ADD_ROW'.
+    ls_toolbar-icon = icon_create.
+    ls_toolbar-quickinfo = 'Add New Row'.
+    ls_toolbar-text = 'Add Row'.
+    APPEND ls_toolbar TO e_object->mt_toolbar.
+
+    " Add separator
+    CLEAR ls_toolbar.
+    ls_toolbar-function = 'Z_SEPARATOR'.
+    ls_toolbar-butn_type = 3. " Separator
+    APPEND ls_toolbar TO e_object->mt_toolbar.
+
+    " Add delete button
+    CLEAR ls_toolbar.
+    ls_toolbar-function = 'Z_DELETE_ROW'.
+    ls_toolbar-icon = icon_delete.
+    ls_toolbar-quickinfo = 'Delete Selected Row'.
+    ls_toolbar-text = 'Delete'.
+    APPEND ls_toolbar TO e_object->mt_toolbar.
+  ENDMETHOD.
+
+  METHOD handle_user_command.
+    CASE e_ucomm.
+      WHEN 'Z_ADD_ROW'.
+        PERFORM add_new_row.
+
+      WHEN 'Z_DELETE_ROW'.
+        PERFORM delete_selected_rows.
+
+      WHEN '&IC1'. " Double click
+        PERFORM handle_double_click_action.
+
+      WHEN OTHERS.
+        " Handle standard ALV commands
+    ENDCASE.
+  ENDMETHOD.
+
+  METHOD handle_data_changed.
+    DATA: lo_changed_data TYPE REF TO cl_alv_changed_data_protocol,
+          ls_mod_cell TYPE lvc_s_modi,
+          lv_value TYPE string.
+
+    lo_changed_data = er_data_changed.
+
+    " Process changed cells
+    LOOP AT lo_changed_data->mt_mod_cells INTO ls_mod_cell.
+      " Validate changed data
+      CASE ls_mod_cell-fieldname.
+        WHEN 'KUNNR'.
+          " Validate customer number
+          IF strlen( ls_mod_cell-value ) <> 10.
+            CALL METHOD er_data_changed->add_protocol_entry
+              EXPORTING
+                i_msgid = 'Z_CUSTOMER_MSG'
+                i_msgno = '001'
+                i_msgty = 'E'
+                i_msgv1 = 'Customer number must be 10 characters'
+                i_fieldname = ls_mod_cell-fieldname
+                i_row_id = ls_mod_cell-row_id.
+          ENDIF.
+
+        WHEN 'NAME1'.
+          " Validate name
+          IF ls_mod_cell-value IS INITIAL.
+            CALL METHOD er_data_changed->add_protocol_entry
+              EXPORTING
+                i_msgid = 'Z_CUSTOMER_MSG'
+                i_msgno = '002'
+                i_msgty = 'E'
+                i_msgv1 = 'Customer name is mandatory'
+                i_fieldname = ls_mod_cell-fieldname
+                i_row_id = ls_mod_cell-row_id.
+          ENDIF.
+
+        WHEN OTHERS.
+          " Handle other field validations
+      ENDCASE.
+    ENDLOOP.
+
+    " Mark data as changed
+    gv_data_changed = abap_true.
+  ENDMETHOD.
+
+  METHOD handle_data_changed_finished.
+    DATA: ls_good_cell TYPE lvc_s_modi.
+
+    " Process successfully changed cells
+    IF e_modified = abap_true.
+      LOOP AT et_good_cells INTO ls_good_cell.
+        " Update internal table
+        READ TABLE gt_customers INDEX ls_good_cell-row_id.
+        IF sy-subrc = 0.
+          " Update field value
+          ASSIGN COMPONENT ls_good_cell-fieldname
+            OF STRUCTURE gt_customers[ ls_good_cell-row_id ]
+            TO FIELD-SYMBOL(<fs_field>).
+          IF sy-subrc = 0.
+            <fs_field> = ls_good_cell-value.
+          ENDIF.
+        ENDIF.
+      ENDLOOP.
+
+      " Refresh display
+      PERFORM refresh_alv_display.
+    ENDIF.
+  ENDMETHOD.
+
+  METHOD handle_double_click.
+    DATA: ls_customer TYPE kna1.
+
+    " Get selected row data
+    READ TABLE gt_customers INTO ls_customer INDEX e_row-index.
+    IF sy-subrc = 0.
+      " Navigate to detail screen
+      gv_customer_id = ls_customer-kunnr.
+      CALL SCREEN 0200.
+    ENDIF.
+  ENDMETHOD.
+
+  METHOD handle_hotspot_click.
+    DATA: ls_customer TYPE kna1.
+
+    " Handle hotspot click
+    READ TABLE gt_customers INTO ls_customer INDEX e_row_id-index.
+    IF sy-subrc = 0.
+      CASE e_column_id-fieldname.
+        WHEN 'KUNNR'.
+          " Navigate to customer detail
+          gv_customer_id = ls_customer-kunnr.
+          CALL SCREEN 0200.
+      ENDCASE.
+    ENDIF.
+  ENDMETHOD.
+
+  METHOD handle_button_click.
+    " Handle button click in ALV
+    READ TABLE gt_customers INDEX es_row_no-row_id.
+    IF sy-subrc = 0.
+      " Process button click
+    ENDIF.
+  ENDMETHOD.
+
+  METHOD handle_onf1.
+    " Handle F1 help
+    CASE e_fieldname.
+      WHEN 'KUNNR'.
+        " Show F1 help for customer number
+        CALL FUNCTION 'HELP_OBJECT_SHOW'
+          EXPORTING
+            dokclass = 'DE'
+            dokname = 'KNA1-KUNNR'.
+    ENDCASE.
+  ENDMETHOD.
+
+ENDCLASS.
+```
+
+#### Supporting Forms
+```abap
+FORM add_new_row.
+  DATA: ls_customer TYPE kna1.
+
+  " Add new empty row
+  CLEAR ls_customer.
+  ls_customer-bukrs = gv_company_code.
+  APPEND ls_customer TO gt_customers.
+
+  " Refresh ALV
+  gv_data_changed = abap_true.
+  PERFORM refresh_alv_display.
+ENDFORM.
+
+FORM delete_selected_rows.
+  DATA: lt_rows TYPE lvc_t_row,
+        ls_row TYPE lvc_s_row,
+        lv_index TYPE i.
+
+  " Get selected rows
+  go_alv_grid->get_selected_rows(
+    IMPORTING
+      et_index_rows = lt_rows
+    EXCEPTIONS
+      OTHERS = 1
+  ).
+
+  IF sy-subrc <> 0 OR lt_rows IS INITIAL.
+    MESSAGE i001(z_alv_msg) WITH 'No rows selected'.
+    RETURN.
+  ENDIF.
+
+  " Delete selected rows (in reverse order to maintain indices)
+  SORT lt_rows BY index DESCENDING.
+  LOOP AT lt_rows INTO ls_row.
+    DELETE gt_customers INDEX ls_row-index.
+  ENDLOOP.
+
+  " Refresh ALV
+  gv_data_changed = abap_true.
+  PERFORM refresh_alv_display.
+
+  MESSAGE s002(z_alv_msg) WITH 'Rows deleted successfully'.
+ENDFORM.
+
+FORM handle_double_click_action.
+  " Handle double click action
+  " Implementation depends on business requirements
+ENDFORM.
+```
+
+#### Container Cleanup
+```abap
+MODULE cleanup_alv_container.
+  " Cleanup ALV grid
+  IF go_alv_grid IS BOUND.
+    go_alv_grid->free( ).
+    FREE go_alv_grid.
+  ENDIF.
+
+  " Cleanup container
+  IF go_container IS BOUND.
+    go_container->free( ).
+    FREE go_container.
+  ENDIF.
+ENDMODULE.
+```
+
+### ALV Best Practices
+
+#### Field Catalog
+- Always build field catalog explicitly
+- Use REF_TABLE and REF_FIELD for type safety
+- Set appropriate column texts (SCRTEXT_S, SCRTEXT_M, SCRTEXT_L)
+- Mark editable fields with EDIT = ABAP_TRUE
+- Set appropriate output lengths
+- Use KEY = ABAP_TRUE for key fields
+
+#### Layout Management
+- Use variants for user preferences
+- Save variants appropriately (A = user, U = user default, X = global)
+- Enable zebra striping for readability
+- Optimize column widths
+- Set appropriate selection modes
+
+#### Event Handling
+- Register only required events
+- Handle validation in DATA_CHANGED event
+- Use DATA_CHANGED_FINISHED for post-processing
+- Provide user feedback for actions
+- Handle errors gracefully
+
+#### Performance
+- Load data efficiently
+- Use stable refresh for large datasets
+- Avoid unnecessary refreshes
+- Use appropriate table types
+- Limit data displayed initially
+
+#### Error Handling
+- Always check SY-SUBRC after ALV operations
+- Handle exceptions in TRY-CATCH blocks
+- Provide meaningful error messages
+- Validate data before displaying
+- Use protocol entries for field-level errors
+
+### ALV Container Checklist
+
+- [ ] Container created in PBO module
+- [ ] ALV grid created and linked to container
+- [ ] Field catalog built explicitly
+- [ ] Layout configured appropriately
+- [ ] Variant setup for user preferences
+- [ ] Events registered and handled
+- [ ] Toolbar customized if needed
+- [ ] Data validation in DATA_CHANGED event
+- [ ] Refresh handled correctly
+- [ ] Container cleanup on screen exit
+- [ ] Error handling implemented
+- [ ] **NEVER use Native SQL - Open SQL only**
+- [ ] All ALV operations check SY-SUBRC
+- [ ] Exception handling with TRY-CATCH
+- [ ] Code follows naming conventions
+
+## Module Pool Best Practices
+
+### Program Organization
+- Use includes for PBO modules (O01)
+- Use includes for PAI modules (I01)
+- Use includes for form routines (F01)
+- Keep main program clean and readable
+- Document all includes
+
+### Screen Navigation
+- Use logical screen flow
+- Provide clear navigation paths
+- Handle back/cancel appropriately
+- Use LEAVE TO SCREEN for navigation
+- Use SET SCREEN for same-screen refresh
+
+### Performance
+- Load data efficiently
+- Use SELECT SINGLE for single records
+- Avoid unnecessary database calls
+- Cache data when appropriate
+- Use appropriate table types
+
+### Maintainability
+- Use meaningful names for all components
+- Document complex logic
+- Keep modules small and focused
+- Use form routines for reusable logic
+- Follow naming conventions consistently
+
+## Component Validation and Completeness Check
+
+### Critical Validation Rules
+
+Before finalizing a module pool, **ALWAYS verify** that all referenced components exist:
+
+#### 1. FORM Routine Validation
+- [ ] **Every PERFORM statement has a corresponding FORM**
+  - Search for all `PERFORM` statements in the code
+  - Verify each `PERFORM <form_name>` has a matching `FORM <form_name>` in F01 include
+  - Check that FORM parameters match (IMPORTING, EXPORTING, CHANGING, TABLES)
+  - Ensure FORM is in the correct include file (F01 for form routines)
+
+#### 2. MODULE Validation
+- [ ] **Every MODULE referenced in screen flow logic exists**
+  - Check PBO flow logic: all `MODULE <module_name> OUTPUT` must exist in O01 include
+  - Check PAI flow logic: all `MODULE <module_name> INPUT` must exist in I01 include
+  - Verify MODULE names match exactly (case-sensitive in ABAP)
+  - Ensure MODULEs are in correct include files (O01 for PBO, I01 for PAI)
+
+#### 3. Include File Validation
+- [ ] **All INCLUDE statements reference existing files**
+  - Verify `INCLUDE zp_<program>_o01` exists (PBO modules)
+  - Verify `INCLUDE zp_<program>_i01` exists (PAI modules)
+  - Verify `INCLUDE zp_<program>_f01` exists (Form routines)
+  - Check that include file names match program naming convention
+
+#### 4. Data Structure Validation
+- [ ] **All data types and structures referenced exist**
+  - Verify all `TYPE` references point to existing data elements/types
+  - Check that all table/structure types exist (e.g., `TYPE zds_emp_header`)
+  - Ensure all field references match structure definitions
+  - Validate internal table declarations reference valid line types
+
+#### 5. Message Class Validation
+- [ ] **All message class references are valid**
+  - Verify message class exists (e.g., `z_emp_msg`)
+  - Check that all message numbers used in code exist in message class
+  - Ensure message types match (E, W, I, S, A, X)
+  - Validate message variable placeholders match message definition
+
+#### 6. Authorization Object Validation
+- [ ] **All authorization objects referenced exist**
+  - Verify authorization object exists (e.g., `Z_EMP_MAINT`)
+  - Check that all authorization field IDs match object definition
+  - Ensure activity values are valid (01, 02, 03, 06, etc.)
+
+#### 7. Function Module Validation
+- [ ] **All function modules called exist**
+  - Verify `CALL FUNCTION` statements reference existing function modules
+  - Check that all EXPORTING/IMPORTING parameters match function module interface
+  - Ensure all EXCEPTIONS are handled appropriately
+
+#### 8. Screen Component Validation
+- [ ] **All screen components referenced exist**
+  - Verify GUI status name exists (e.g., 'MAIN')
+  - Check that titlebar name exists (e.g., 'TITLE_0100')
+  - Ensure all screen fields referenced in code exist on screen
+  - Validate custom control names match screen definitions
+
+#### 9. Cross-Reference Validation
+- [ ] **Verify consistency across includes**
+  - Check that global variables used in includes are declared in main program
+  - Verify constants used in includes are defined in main program
+  - Ensure all includes can access required data declarations
+  - Check that form routines called from modules exist
+
+### Validation Checklist Template
+
+Use this checklist before finalizing any module pool:
+
+```
+COMPONENT VALIDATION CHECKLIST
+==============================
+
+PERFORM Statements:
+[ ] Search codebase for all PERFORM statements
+[ ] Verify each FORM exists in F01 include
+[ ] Check parameter matching (IMPORTING/EXPORTING/CHANGING)
+[ ] Confirm FORM is in correct include file
+
+MODULE Statements:
+[ ] Check PBO flow logic - all MODULEs exist in O01
+[ ] Check PAI flow logic - all MODULEs exist in I01
+[ ] Verify MODULE names match exactly
+[ ] Confirm MODULEs are in correct include files
+
+INCLUDE Files:
+[ ] O01 include file exists and is included
+[ ] I01 include file exists and is included
+[ ] F01 include file exists and is included
+[ ] Include file names match naming convention
+
+Data Structures:
+[ ] All TYPE references point to existing types
+[ ] All table/structure types exist
+[ ] All field references match structure definitions
+[ ] Internal table line types are valid
+
+Message Classes:
+[ ] Message class exists
+[ ] All message numbers exist in message class
+[ ] Message types are correct
+[ ] Message variables match placeholders
+
+Authorization:
+[ ] Authorization object exists
+[ ] Authorization field IDs match
+[ ] Activity values are valid
+
+Function Modules:
+[ ] All CALL FUNCTION statements reference existing FMs
+[ ] Parameters match function module interface
+[ ] Exceptions are handled
+
+Screen Components:
+[ ] GUI status exists
+[ ] Titlebar exists
+[ ] Screen fields exist
+[ ] Custom controls match screen definitions
+
+Cross-References:
+[ ] Global variables accessible from includes
+[ ] Constants accessible from includes
+[ ] Form routines accessible from modules
+[ ] No circular dependencies
+```
+
+### Common Validation Errors to Avoid
+
+#### Error Pattern 1: Missing FORM for PERFORM
+```abap
+" ❌ WRONG: PERFORM called but FORM doesn't exist
+MODULE user_command_0100 INPUT.
+  PERFORM check_unsaved_changes.  " FORM missing!
+ENDMODULE.
+
+" ✅ CORRECT: FORM exists in F01 include
+FORM check_unsaved_changes.
+  " Implementation
+ENDFORM.
+```
+
+#### Error Pattern 2: MODULE vs FORM Confusion
+```abap
+" ❌ WRONG: Using PERFORM to call MODULE
+MODULE user_command_0100 INPUT.
+  PERFORM check_unsaved_changes.  " This is a MODULE, not FORM!
+ENDMODULE.
+
+MODULE check_unsaved_changes INPUT.  " Can't be called with PERFORM
+  " Implementation
+ENDMODULE.
+
+" ✅ CORRECT: Use FORM if calling with PERFORM
+FORM check_unsaved_changes.
+  " Implementation
+ENDFORM.
+```
+
+#### Error Pattern 3: Missing Include Files
+```abap
+" ❌ WRONG: INCLUDE references non-existent file
+INCLUDE zp_employee_maintenance_o01.  " File doesn't exist!
+
+" ✅ CORRECT: Include file exists and contains required modules
+INCLUDE zp_employee_maintenance_o01.  " File exists with MODULEs
+```
+
+### Validation Best Practices
+
+1. **Always validate after code generation**
+   - Run validation checklist immediately after creating module pool
+   - Don't assume all components are created automatically
+   - Verify each component manually or with automated checks
+
+2. **Use systematic approach**
+   - Start with PERFORM statements (most common error)
+   - Then check MODULE statements
+   - Verify includes and data structures
+   - Finally check external dependencies (messages, authorization)
+
+3. **Test compilation early**
+   - Activate code in SAP system to catch missing components
+   - Fix errors immediately before proceeding
+   - Don't accumulate multiple validation errors
+
+4. **Document validation results**
+   - Keep track of what was validated
+   - Note any assumptions or dependencies
+   - Update checklist as code evolves
+
+### Automated Validation Commands
+
+When possible, use these checks:
+
+```abap
+" Search for all PERFORM statements
+" Command: grep -i "PERFORM" *.abap
+
+" Search for all FORM definitions
+" Command: grep -i "FORM" *.abap
+
+" Search for all MODULE definitions
+" Command: grep -i "MODULE.*OUTPUT\|MODULE.*INPUT" *.abap
+
+" Verify include files exist
+" Check file system or SAP repository
+```
+
+## Module Pool Checklist
+
+- [ ] Program name follows ZP_ or YP_ prefix
+- [ ] All global data declared at program level
+- [ ] PBO modules organized in include (O01)
+- [ ] PAI modules organized in include (I01)
+- [ ] Form routines organized in include (F01)
+- [ ] **All PERFORM statements have corresponding FORMs (VALIDATED)**
+- [ ] **All MODULE statements exist in correct includes (VALIDATED)**
+- [ ] **All INCLUDE files exist and are correct (VALIDATED)**
+- [ ] **All data structures referenced exist (VALIDATED)**
+- [ ] **All message classes and messages exist (VALIDATED)**
+- [ ] **All authorization objects exist (VALIDATED)**
+- [ ] All screens have status and titlebar
+- [ ] All user commands handled
+- [ ] Input validation implemented
+- [ ] Authorization checks performed
+- [ ] Error handling implemented
+- [ ] Transaction code created
+- [ ] GUI status defined
+- [ ] **NEVER use Native SQL - Open SQL only**
+- [ ] All database operations check SY-SUBRC
+- [ ] Exception handling with TRY-CATCH
+- [ ] Code follows naming conventions
+- [ ] Documentation complete
+- [ ] **Component validation checklist completed**

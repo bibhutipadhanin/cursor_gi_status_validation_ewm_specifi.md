@@ -1,0 +1,287 @@
+FUNCTION ZSCM_POST_CHK_BILLING
+  IMPORTING
+    VALUE(IM_REPORT_NO) TYPE YREPORT_NO
+    VALUE(IT_DELIVERY) TYPE ZSCM_POST_DELIVERY_TT OPTIONAL
+  EXPORTING
+    VALUE(ET_OUTPUT) TYPE ZSCM_BILLING_TT
+    VALUE(ET_RETURN) TYPE BAPIRET2_T.
+
+
+
+  DATA : lt_delivery TYPE zscm_incoterm_delivery_tt,
+         lw_delivery TYPE zscm_incoterm_delivery_tty,
+         lt_post     TYPE zscmtt_rpu_chk_output,
+         lw_post     TYPE zscmst_rpu_chk_output,
+         lt_bill     TYPE ztt_fiori_billing,
+         lw_bill     TYPE zst_fiori_billing,
+         lt_message  TYPE ztt_log,
+         lw_message  TYPE zst_log,
+         lw_input    TYPE zscm_post_delivery_st,
+         lw_output   TYPE zscm_billing_st,
+         lw_return   TYPE bapiret2,
+         lv_area     TYPE yarea.
+
+  IF it_delivery[] IS NOT INITIAL.
+    LOOP AT it_delivery INTO lw_input.
+      MOVE-CORRESPONDING lw_input TO lw_delivery.
+      APPEND lw_delivery TO lt_delivery[].
+      CLEAR : lw_delivery , lw_input.
+    ENDLOOP.
+  ENDIF.
+
+  IF lt_delivery[] IS NOT INITIAL.
+
+*&---------------------------------------------------------------------*
+*& Enhancement: GI Status Validation for Billing Posting Check
+*& Location: After line 32 (before Z_SCM_RPU_POSTING_CHK call)
+*& Author: Development Team
+*& Date: 19-Dec-2025
+*& Transport: <Transport Number>
+*& CD: 8085981
+*&---------------------------------------------------------------------*
+
+    " Local data declarations for GI validation
+    DATA: lt_delivery_chk     TYPE zscm_delivery_tt,
+          ls_delivery_chk     TYPE zscm_delivery_st,
+          lt_gi_status_chk    TYPE zscm_gi_status_tt,
+          ls_gi_status_chk    TYPE zscm_gi_status_st,
+          lt_return_chk       TYPE bapiret2_t,
+          ls_return_chk       TYPE bapiret2,
+          lt_yttstx0002_chk   TYPE TABLE OF yttstx0002,
+          ls_yttstx0002_chk   TYPE yttstx0002,
+          lv_rfc_dest_chk     TYPE rfcdest,
+          lv_gi_active_chk    TYPE zactive_flag,
+          lv_pending_chk      TYPE string,
+          lv_message_chk      TYPE string,
+          lv_area_chk         TYPE yarea.
+
+    " Constants for GI validation
+    CONSTANTS: lc_gi_param_chk TYPE rvari_vnam
+                 VALUE 'ZSCM_GI_STATUS_CHECK',
+               lc_rfc_param_chk TYPE zparam1 VALUE 'ZEWM_DEST'.
+
+    " Step 1: Check if GI validation is active
+    CLEAR lv_gi_active_chk.
+    SELECT SINGLE active
+      FROM zlog_exec_var
+      INTO lv_gi_active_chk
+      WHERE name = lc_gi_param_chk
+        AND active = abap_true.
+
+    IF sy-subrc = 0 AND lv_gi_active_chk = abap_true.
+
+      " Step 2: Get deliveries - two possible sources
+      CLEAR: lt_delivery_chk.
+
+      " Option A: From IT_DELIVERY parameter (if provided)
+      IF it_delivery IS NOT INITIAL.
+        LOOP AT it_delivery INTO lw_input.
+          CLEAR ls_delivery_chk.
+          ls_delivery_chk-vbeln = lw_input-delivery.
+          IF ls_delivery_chk-vbeln IS NOT INITIAL.
+            APPEND ls_delivery_chk TO lt_delivery_chk.
+          ENDIF.
+        ENDLOOP.
+
+        " Remove duplicates
+        IF lt_delivery_chk IS NOT INITIAL.
+          SORT lt_delivery_chk BY vbeln.
+          DELETE ADJACENT DUPLICATES FROM lt_delivery_chk
+            COMPARING vbeln.
+        ENDIF.
+
+      ELSE.
+        " Option B: From YTTSTX0002 using reporting number
+        IF im_report_no IS NOT INITIAL.
+
+          " Get area for reporting number
+          CLEAR lv_area_chk.
+          SELECT SINGLE area
+            FROM yttstx0001
+            INTO lv_area_chk
+            WHERE report_no = im_report_no.
+
+          IF sy-subrc = 0 AND lv_area_chk IS NOT INITIAL.
+            " Get deliveries
+            SELECT area
+                   report_no
+                   delivery
+              FROM yttstx0002
+              INTO TABLE lt_yttstx0002_chk
+              WHERE area = lv_area_chk
+                AND report_no = im_report_no
+                AND delivery IS NOT INITIAL.
+
+            IF sy-subrc = 0.
+              " Remove duplicates
+              SORT lt_yttstx0002_chk BY delivery.
+              DELETE ADJACENT DUPLICATES FROM lt_yttstx0002_chk
+                COMPARING delivery.
+
+              " Prepare delivery table
+              LOOP AT lt_yttstx0002_chk INTO ls_yttstx0002_chk.
+                CLEAR ls_delivery_chk.
+                ls_delivery_chk-vbeln = ls_yttstx0002_chk-delivery.
+                APPEND ls_delivery_chk TO lt_delivery_chk.
+              ENDLOOP.
+            ENDIF.
+          ENDIF.
+        ENDIF.
+      ENDIF.
+
+      " Step 3: Proceed if deliveries found
+      IF lt_delivery_chk IS NOT INITIAL.
+
+        " Get RFC destination
+        CLEAR lv_rfc_dest_chk.
+        SELECT SINGLE value1
+          FROM zwmspara
+          INTO lv_rfc_dest_chk
+          WHERE param1 = lc_rfc_param_chk
+            AND active_flag = abap_true.
+
+        IF sy-subrc = 0 AND lv_rfc_dest_chk IS NOT INITIAL.
+
+          " Step 4: Call RFC to check GI status
+          CLEAR: lt_gi_status_chk, lt_return_chk.
+
+          CALL FUNCTION 'ZSCM_GI_STATUS_CHECK'
+            DESTINATION lv_rfc_dest_chk
+            EXPORTING
+              it_delivery  = lt_delivery_chk
+            IMPORTING
+              et_gi_status = lt_gi_status_chk
+              et_return    = lt_return_chk
+            EXCEPTIONS
+              system_failure        = 1
+              communication_failure = 2
+              OTHERS                = 3.
+
+          IF sy-subrc <> 0.
+            " RFC call failed
+            CLEAR lw_return.
+            lw_return-type    = 'E'.
+            lw_return-id      = 'ZSCM_GI_MSG'.
+            lw_return-number  = '021'.
+            CONCATENATE 'Unable to connect to EWM for GI validation.'
+                        'Error:' sy-msgv1
+              INTO lw_return-message SEPARATED BY space.
+            APPEND lw_return TO et_return.
+            RETURN.
+
+          ELSE.
+
+            " Step 5: Evaluate response
+            IF lt_gi_status_chk IS NOT INITIAL.
+              " GI is incomplete - build error message
+              CLEAR lv_pending_chk.
+
+              LOOP AT lt_gi_status_chk INTO ls_gi_status_chk.
+                IF sy-tabix = 1.
+                  lv_pending_chk = ls_gi_status_chk-vbeln.
+                ELSE.
+                  CONCATENATE lv_pending_chk ', ' ls_gi_status_chk-vbeln
+                    INTO lv_pending_chk.
+                ENDIF.
+
+                " Limit message length
+                IF strlen( lv_pending_chk ) > 200.
+                  CONCATENATE lv_pending_chk '...' INTO lv_pending_chk.
+                  EXIT.
+                ENDIF.
+              ENDLOOP.
+
+              " Display error message
+              CLEAR lw_return.
+              lw_return-type    = 'E'.
+              lw_return-id      = 'ZSCM_GI_MSG'.
+              lw_return-number  = '022'.
+              CONCATENATE 'GI not yet completed in EWM.'
+                          'Cannot proceed with posting check.'
+                          'Pending deliveries:' lv_pending_chk
+                INTO lw_return-message SEPARATED BY space.
+              APPEND lw_return TO et_return.
+
+              " Stop processing - do NOT call Z_SCM_RPU_POSTING_CHK
+              RETURN.
+
+            ENDIF.
+
+          ENDIF.
+        ELSE.
+          " RFC destination not configured - proceed with failsafe
+          CLEAR lw_return.
+          lw_return-type    = 'W'.
+          lw_return-id      = 'ZSCM_GI_MSG'.
+          lw_return-number  = '023'.
+          lw_return-message =
+            'RFC destination not configured. GI validation skipped.'.
+          APPEND lw_return TO et_return.
+
+        ENDIF.
+
+      ENDIF.
+    ENDIF.
+
+*&---------------------------------------------------------------------*
+*& End of Enhancement: GI Status Validation
+*&---------------------------------------------------------------------*
+
+    CALL FUNCTION 'Z_SCM_RPU_POSTING_CHK'
+      EXPORTING
+        it_delivery = lt_delivery
+      IMPORTING
+        et_output   = lt_post.
+  ENDIF.
+
+  IF lt_post[] IS NOT INITIAL.
+    DELETE lt_post WHERE rpu_posting_flag IS NOT INITIAL.
+  ENDIF.
+
+  IF im_report_no IS NOT INITIAL.
+    CLEAR : lv_area.
+    SELECT SINGLE area
+      FROM yttstx0001 CLIENT SPECIFIED
+      INTO lv_area
+      WHERE mandt = sy-mandt
+      AND   report_no = im_report_no.
+    IF sy-subrc <> 0.
+      CLEAR : lv_area.
+    ENDIF.
+  ENDIF.
+  IF lt_post[] IS INITIAL.
+    CALL FUNCTION 'Z_PTC_FIORI_BILLING'
+      EXPORTING
+        im_area      = lv_area
+        im_report_no = im_report_no
+      IMPORTING
+        ex_output    = lt_bill
+        ex_log       = lt_message.
+
+    IF lt_message[] IS NOT INITIAL.
+      LOOP AT lt_message INTO lw_message.
+        lw_return-type    = lw_message-type.
+        lw_return-id      = lw_message-id.
+        lw_return-message = lw_message-message.
+        APPEND lw_return TO et_return[].
+        CLEAR : lw_return , lw_message.
+      ENDLOOP.
+    ENDIF.
+
+    IF lt_bill[] IS NOT INITIAL.
+      LOOP AT lt_bill INTO lw_bill.
+        MOVE-CORRESPONDING lw_bill TO lw_output.
+        APPEND lw_output TO et_output.
+        CLEAR : lw_output , lw_bill.
+      ENDLOOP.
+    ENDIF.
+  ELSE.
+    LOOP AT lt_post INTO lw_post.
+      lw_return-type = 'E'.
+      CONCATENATE text-001 lw_post-delivery INTO lw_return-message SEPARATED BY space.
+      APPEND lw_return TO et_return[].
+      CLEAR : lw_post , lw_return.
+    ENDLOOP.
+  ENDIF.
+
+ENDFUNCTION.

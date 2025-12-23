@@ -1,0 +1,2265 @@
+FUNCTION Z_FIORI_SWM_OB_INV_GENRATE
+  IMPORTING
+    VALUE(I_AREA) TYPE YAREA
+    VALUE(I_LGNUM) TYPE /SCWM/LGNUM
+    VALUE(I_REPORT_NO) TYPE YREPORT_NO
+    VALUE(I_TRUCK_NO) TYPE YTRUCK_NO
+    VALUE(I_LIFNR) TYPE LIFNR
+  EXPORTING
+    VALUE(ET_INVLIST) TYPE ZINVLIST_TT
+    VALUE(ET_RETURN) TYPE BAPIRET2_T.
+
+
+
+* CHANGE HISTORY
+*"----------------------------------------------------------------------
+*1 | pwc_159 | 13.06.2018| For RPU Posting | 8023099: Chnages for RPU.
+*"----------------------------------------------------------------------
+  TYPES:
+         BEGIN OF lty_ytts2,
+           area	      TYPE yarea,
+           report_no  TYPE yreport_no,
+           item_no    TYPE posnr_vl,
+           dlivry_no  TYPE vbeln,
+           posnr      TYPE posnr_va,
+           vbeln      TYPE vbeln_vl,
+           vbpos      TYPE posnr_vl,
+           ebeln      TYPE ebeln,
+           ebelp      TYPE ebelp,
+           mat_code   TYPE matnr,
+           lr_no      TYPE ylrno,
+           lr_dt      TYPE datum,
+           delivery   TYPE vbeln_vl,
+           billno     TYPE vbeln_vf,
+           invoice_no TYPE vbeln_vf,
+         END OF lty_ytts2,
+
+         BEGIN OF lty_likp,
+           vbeln      TYPE vbeln_vl,
+           vstel      TYPE vstel,
+           fkarv      TYPE fkarv,
+           vkoiv      TYPE vkoiv,
+           wadat_ist   TYPE likp-wadat_ist,
+         END OF lty_likp,
+
+         BEGIN OF lty_lips,
+           vbeln      TYPE vbeln_vl,
+           posnr      TYPE posnr_vl,
+           lfimg      TYPE lfimg,
+         END OF lty_lips,
+
+         BEGIN OF lty_vbap,
+           vbeln        TYPE vbeln_va,
+           posnr        TYPE posnr_va,
+           matnr        TYPE matnr,
+         END OF lty_vbap,
+
+         BEGIN OF lty_ekpo,
+           ebeln        TYPE ebeln,
+           ebelp        TYPE ebelp,
+           matnr        TYPE matnr,
+           inco1        TYPE inco1,
+         END OF lty_ekpo,
+
+         BEGIN OF lty_ekko,
+           ebeln        TYPE ebeln,
+           inco1        TYPE inco1,
+         END OF lty_ekko,
+
+         BEGIN OF lty_vbkd,
+           vbeln        TYPE vbeln,
+           posnr        TYPE posnr,
+           inco1        TYPE inco1,
+         END OF lty_vbkd,
+
+         BEGIN OF lty_vbrp,
+           vbeln        TYPE vbrp-vbeln,
+         END OF lty_vbrp,
+
+         BEGIN OF lty_t001w,
+           werks        TYPE werks_d,
+           bwkey        TYPE bwkey,
+         END OF lty_t001w,
+
+         BEGIN OF lty_t001k,
+           bwkey        TYPE bwkey,
+           bukrs        TYPE bukrs,
+         END OF lty_t001k.
+
+  TYPES: BEGIN OF lty_rpu_applicable,
+         vbeln TYPE vbeln_vl,
+         ind TYPE char1,
+         END OF lty_rpu_applicable,
+
+         BEGIN OF lty_zmkpf_mseg,
+         bwart TYPE bwart,
+         xblnr TYPE xblnr,
+         END OF lty_zmkpf_mseg,
+
+         BEGIN OF lty_vbfa,
+         vbelv TYPE vbeln_von,
+         posnv TYPE posnr_von,
+         vbeln TYPE vbeln_nach,
+         posnn TYPE posnr_nach,
+         vbtyp_n TYPE vbtyp_n,
+         END OF lty_vbfa,
+
+         BEGIN OF lty_vbrk,
+         vbeln TYPE vbeln_vf,
+         fksto TYPE fksto,
+         END OF lty_vbrk,
+
+         BEGIN OF lty_mard,
+         matnr TYPE matnr,
+         werks TYPE werks_d,
+         lgort TYPE lgort_d,
+         labst TYPE labst,
+         END OF lty_mard,
+
+         BEGIN OF lty_prog_table,
+         repid       TYPE repid,
+         lgnum       TYPE /scwm/lgnum,
+         zvariable1	 TYPE zvariable,
+         zvariable2	 TYPE zvariable,
+         zlow	       TYPE zlow,
+         zhigh       TYPE	zhigh,
+         active_flag TYPE	zactive_flag,
+         END OF lty_prog_table,
+
+         BEGIN OF lty_yttstx0002, " added by omkar more on 20.11.2025 CD:8085981 TR:RD2K9A5D5L
+           area	      TYPE yarea,
+           report_no  TYPE yreport_no,
+           delivery   TYPE vbeln_vl,
+         END OF lty_yttstx0002,
+
+         BEGIN OF lty_zscm_palet_ledgr, " added by omkar more on 20.11.2025 CD:8085981 TR:RD2K9A5D5L
+           MANDT        TYPE MANDT,
+           PACKING_type TYPE  ZPACKING_TYPE,
+           VBELN        TYPE VBELN_VL,
+           EXIDV       TYPE EXIDV,
+           COUNTER     TYPE	ZPALLET_COUNT,
+           RPU_MBLNR   TYPE	MBLNR,
+           CNCL_MBLNR	 TYPE ZCNCL_MBLNR,
+           PICK_CANCEL TYPE	ZPICK_CANCEL,
+         END OF lty_zscm_palet_ledgr.
+
+         DATA:lt_yttstx0002       TYPE TABLE OF lty_yttstx0002,         " added by omkar more on 20.11.2025 CD:8085981 TR:RD2K9A5D5L
+              lt_zscm_palet_ledgr TYPE TABLE OF lty_zscm_palet_ledgr,   " added by omkar more on 20.11.2025 CD:8085981 TR:RD2K9A5D5L
+              lw_zscm_palet_ledgr TYPE lty_zscm_palet_ledgr.            " added by omkar more on 20.11.2025 CD:8085981 TR:RD2K9A5D5L
+
+  DATA: lt_rpu_pending  TYPE TABLE OF lty_rpu_applicable,
+        lt_zmkpf_mseg   TYPE TABLE OF lty_zmkpf_mseg,
+        lt_xblnr        TYPE TABLE OF xblnr1,
+        lt_vbfa         TYPE TABLE OF lty_vbfa,
+        lt_vbfa_t       TYPE TABLE OF lty_vbfa,
+        lt_vbrk         TYPE TABLE OF lty_vbrk,
+        lt_mard         TYPE TABLE OF lty_mard,
+        lw_mard         TYPE          lty_mard,
+        lw_vbrk         TYPE          lty_vbrk,
+        lw_vbfa         TYPE          lty_vbfa,
+        lt_vbeln        TYPE          t_vbeln,
+        lw_vbeln        TYPE          vbeln_line,
+        lt_rpu          TYPE          zlog_rpu_details_t,
+        lt_rpu_t        TYPE          zlog_rpu_details_t,
+        lw_rpu          TYPE          zlog_rpu_details_s,
+        lt_rpu_p        TYPE          zlog_rpu_details_t,
+        lw_rpu_p        TYPE          zlog_rpu_details_s,
+        lw_rpu_pending  TYPE          lty_rpu_applicable,
+        lw_xblnr        TYPE          xblnr1,
+        lw_labst        TYPE          string,
+        lw_zmkpf_mseg   TYPE          lty_zmkpf_mseg,
+        lt_return       TYPE          bapiret2_t,
+        lw_objectkey    TYPE          balnrext,
+        lt_return_log   TYPE          bapiret2_t.
+
+  DATA:
+        lt_ytts2              TYPE STANDARD TABLE OF lty_ytts2,
+        lt_ytts2_t            TYPE STANDARD TABLE OF lty_ytts2,
+        lt_ytts2_temp         TYPE STANDARD TABLE OF lty_ytts2,
+        lt_vbap               TYPE STANDARD TABLE OF lty_vbap,
+        lt_ekpo               TYPE STANDARD TABLE OF lty_ekpo,
+        lt_ekko               TYPE STANDARD TABLE OF lty_ekko,
+        lt_vbkd               TYPE STANDARD TABLE OF lty_vbkd,
+        lt_likp               TYPE STANDARD TABLE OF lty_likp,
+        lt_lips               TYPE STANDARD TABLE OF lty_lips,
+        lt_xexcgrp            TYPE STANDARD TABLE OF gty_xexcgrp,
+        lt_xexcgrp_t          TYPE STANDARD TABLE OF gty_xexcgrp,
+        lt_exgrpop            TYPE STANDARD TABLE OF zcinparam,
+        lt_exgrp              TYPE STANDARD TABLE OF selopt,
+        lt_invgen             TYPE STANDARD TABLE OF gty_invgen,
+        lt_invgen_spart       TYPE STANDARD TABLE OF gty_invgen,
+        lt_invgen_t           TYPE STANDARD TABLE OF gty_invgen,
+        lt_vbrp               TYPE STANDARD TABLE OF lty_vbrp,
+        lt_vstel_s            TYPE STANDARD TABLE OF selopt,
+        lt_t001w              TYPE STANDARD TABLE OF lty_t001w,
+        lt_t001k              TYPE STANDARD TABLE OF lty_t001k,
+
+        lw_ytts2              TYPE lty_ytts2,
+        lw_vbap               TYPE lty_vbap,
+        lw_ekpo               TYPE lty_ekpo,
+        lw_ekko               TYPE lty_ekko,
+        lw_vbkd               TYPE lty_vbkd,
+        lw_likp               TYPE lty_likp,
+        lw_lips               TYPE lty_lips,
+        lw_lips_t             TYPE lty_lips,
+        lw_invgen             TYPE gty_invgen,
+        lw_vstel_s            TYPE selopt,
+        lw_t001w              TYPE lty_t001w,
+        lw_t001k              TYPE lty_t001k,
+        lw_xexcgrp            TYPE gty_xexcgrp,
+        lw_exgrpop            TYPE zcinparam,
+        lw_exgrp              TYPE selopt,
+        lw_spart              TYPE spart,
+        lw_matnr              TYPE matnr,
+        lw_mprof              TYPE mprof,
+        lw_depot_flag         TYPE flag,
+        lw_invlist            TYPE zinvlist_st,
+        lw_return             TYPE bapiret2,
+        lw_tabix              TYPE sy-tabix,
+        lt_prog_table         TYPE TABLE OF lty_prog_table,
+        lw_prog_table         TYPE          lty_prog_table,
+        lr_spart_r             TYPE RANGE OF spart,
+        lw_spart_r             LIKE LINE OF lr_spart_r.
+
+  FIELD-SYMBOLS:
+        <lfs_invgen>          TYPE gty_invgen,
+        <lfs_rpu>             TYPE zlog_rpu_details_s,
+        <lfs_ytts2>           TYPE lty_ytts2.
+
+  CONSTANTS:
+        lc_ysexcsrgrp         TYPE char10 VALUE 'YSEXCSRGRP',
+        lc_oldexgrp           TYPE char8  VALUE 'OLDEXGRP',
+        lc_bwart_621          TYPE bwart  VALUE '621',
+        lc_bwart_303          TYPE bwart  VALUE '303',
+        lc_rpu_lock           TYPE repid  VALUE 'ZLOG_RPU_MAT_LOCK_CHECK'.
+
+  DATA:
+       lt_billingdatain    TYPE STANDARD TABLE OF bapivbrk,
+       lt_ret              TYPE STANDARD TABLE OF bapiret1,
+       lt_success          TYPE STANDARD TABLE OF bapivbrksuccess,
+       lw_billingdatain    TYPE bapivbrk,
+       lw_ret              TYPE bapiret1,
+       lw_success          TYPE bapivbrksuccess,
+       lw_vbrk_spart       TYPE gty_vbrk,
+       lw_flag             TYPE c,
+       lw_flag_t           TYPE c,
+       lw_billno           TYPE vbeln_vf,
+       lw_status           TYPE flag,
+       lw_message          TYPE bapi_msg,
+       lw_rpu_applicable TYPE char1.
+  DATA :
+        lw_vbeln_sp      TYPE vbeln,
+        lw_matdoc     TYPE mblnr,
+        lw_matdoc_yr  TYPE mjahr,
+        lt_return_t TYPE TABLE OF bapiret2.
+
+  DATA : lw_dtime TYPE sy-uzeit,
+         lw_symdate TYPE string,
+         lw_sydate TYPE string.
+
+  REFRESH: gt_vbrk,gt_zparam,gt_1iexcdtl,gt_xexcgrp,
+           gt_rg23d,gt_zparam_lr.
+  CLEAR  : gw_fdc,gw_yrpar, lw_prog_table.
+
+  CONSTANTS : lc_object     TYPE balobj_d   VALUE 'ZSCE_EWMLOG',
+              lc_subobject  TYPE balsubobj  VALUE 'ZSCE_PTC',
+              lc_lgort      TYPE lgort_d    VALUE '7906'.
+
+  DATA: lt_output TYPE  ztt_fiori_billing,
+        lt_log TYPE  ztt_log.
+
+  DATA: lw_output_s TYPE zst_fiori_billing.
+  DATA: lw_log_s TYPE zst_log.
+
+  DATA: lt_ret1 TYPE TABLE OF bapiret2,
+        lv_name TYPE rvari_vnam. " added by omkar more on 20.11.2025 CD:8085981 TR:RD2K9A5D5L
+
+  TYPES : BEGIN OF lty_zlog_prog_table,
+    repid TYPE  repid,
+    active_flag TYPE  zactive_flag,
+    END OF lty_zlog_prog_table.
+
+  DATA: lw_zlog_prog_table TYPE lty_zlog_prog_table.
+
+  CONSTANTS: lc_repid TYPE repid VALUE 'RPUPOST_NEW_PROGRAM',
+             lc_zscm_rpu_new_logic TYPE rvari_vnam VALUE 'ZSCM_RPU_NEW_LOGIC_2025'. " added by omkar more on 20.11.2025 CD:8085981 TR:RD2K9A5D5L
+
+  IF i_area      IS INITIAL OR
+     "i_lgnum     IS INITIAL OR
+     i_report_no IS INITIAL.
+    RETURN.
+  ENDIF.
+
+  CLEAR: lw_zlog_prog_table.
+  SELECT SINGLE repid
+                active_flag
+    FROM zlog_prog_table
+    INTO lw_zlog_prog_table
+    WHERE repid = lc_repid
+    AND active_flag = abap_true.
+
+  CALL FUNCTION 'ENQUEUE_EYTTS1'
+    EXPORTING
+      mode_yttstx0001 = 'E'
+      mandt           = sy-mandt
+      area            = i_area
+      report_no       = i_report_no
+      x_area          = ' '
+      x_report_no     = ' '
+      _scope          = '2'
+      _wait           = ' '
+      _collect        = ' '
+    EXCEPTIONS
+      foreign_lock    = 1
+      system_failure  = 2
+      OTHERS          = 3.
+  IF sy-subrc <> 0.
+    MESSAGE ID sy-msgid TYPE sy-msgty NUMBER sy-msgno
+    WITH sy-msgv1 sy-msgv2 sy-msgv3 sy-msgv4.
+  ENDIF.
+
+*&---------------------------------------------------------------------*
+*& Enhancement: GI Status Validation for Invoice Generation
+*& Location: Before RPU logic (before line 321)
+*& Author: Development Team
+*& Date: 19-Dec-2025
+*& Transport: <Transport Number>
+*& CD: 8085981
+*&---------------------------------------------------------------------*
+
+  " Local data declarations for GI validation
+  DATA: lt_delivery_gi      TYPE zscm_delivery_tt,
+        ls_delivery_gi      TYPE zscm_delivery_st,
+        lt_gi_status        TYPE zscm_gi_status_tt,
+        ls_gi_status        TYPE zscm_gi_status_st,
+        lt_return_gi        TYPE bapiret2_t,
+        ls_return_gi        TYPE bapiret2,
+        lt_yttstx0002_gi    TYPE TABLE OF lty_yttstx0002,
+        ls_yttstx0002_gi    TYPE lty_yttstx0002,
+        lv_rfc_dest         TYPE rfcdest,
+        lv_gi_active        TYPE zactive_flag,
+        lv_pending_list     TYPE string,
+        lv_temp_vbeln       TYPE string,
+        lv_message          TYPE string.
+
+  " Constants for GI validation
+  CONSTANTS: lc_gi_param TYPE rvari_vnam VALUE 'ZSCM_GI_STATUS_CHECK',
+             lc_rfc_param TYPE zparam1 VALUE 'ZEWM_DEST'.
+
+  " Step 1: Check if GI validation is active
+  CLEAR lv_gi_active.
+  SELECT SINGLE active
+    FROM zlog_exec_var
+    INTO lv_gi_active
+    WHERE name = lc_gi_param
+      AND active = abap_true.
+
+  IF sy-subrc = 0 AND lv_gi_active = abap_true.
+
+    " Step 2: Get deliveries for the reporting number
+    CLEAR: lt_yttstx0002_gi, lt_delivery_gi.
+
+    IF i_area IS NOT INITIAL AND i_report_no IS NOT INITIAL.
+      SELECT area
+             report_no
+             delivery
+        FROM yttstx0002
+        INTO TABLE lt_yttstx0002_gi
+        WHERE area = i_area
+          AND report_no = i_report_no
+          AND delivery IS NOT INITIAL.
+
+      IF sy-subrc = 0.
+        " Remove duplicates
+        SORT lt_yttstx0002_gi BY delivery.
+        DELETE ADJACENT DUPLICATES FROM lt_yttstx0002_gi
+          COMPARING delivery.
+
+        " Prepare delivery table for RFC call
+        LOOP AT lt_yttstx0002_gi INTO ls_yttstx0002_gi.
+          CLEAR ls_delivery_gi.
+          ls_delivery_gi-vbeln = ls_yttstx0002_gi-delivery.
+          APPEND ls_delivery_gi TO lt_delivery_gi.
+        ENDLOOP.
+
+      ENDIF.
+    ENDIF.
+
+    " Step 3: Get RFC destination
+    IF lt_delivery_gi IS NOT INITIAL.
+      CLEAR lv_rfc_dest.
+      SELECT SINGLE value1
+        FROM zwmspara
+        INTO lv_rfc_dest
+        WHERE param1 = lc_rfc_param
+          AND active_flag = abap_true.
+
+      IF sy-subrc <> 0.
+        " RFC destination not configured - proceed with failsafe mode
+        lw_return-type    = 'W'.
+        lw_return-id      = 'ZSCM_GI_MSG'.
+        lw_return-number  = '010'.
+        lw_return-message =
+          'RFC destination not configured. GI validation skipped.'.
+        APPEND lw_return TO et_return.
+
+      ELSE.
+
+        " Step 4: Call RFC to check GI status
+        CLEAR: lt_gi_status, lt_return_gi.
+
+        CALL FUNCTION 'ZSCM_GI_STATUS_CHECK'
+          DESTINATION lv_rfc_dest
+          EXPORTING
+            it_delivery  = lt_delivery_gi
+          IMPORTING
+            et_gi_status = lt_gi_status
+            et_return    = lt_return_gi
+          EXCEPTIONS
+            system_failure        = 1
+            communication_failure = 2
+            OTHERS                = 3.
+
+        IF sy-subrc <> 0.
+          " RFC call failed
+          lw_return-type    = 'E'.
+          lw_return-id      = 'ZSCM_GI_MSG'.
+          lw_return-number  = '011'.
+          CONCATENATE 'Unable to connect to EWM system for GI'
+                      'validation. Error:' sy-msgv1
+            INTO lw_return-message SEPARATED BY space.
+          APPEND lw_return TO et_return.
+          PERFORM deque_area_and_report USING i_area i_report_no.
+          RETURN.
+
+        ELSE.
+
+          " Step 5: Evaluate response
+          IF lt_gi_status IS NOT INITIAL.
+            " GI is incomplete - build error message
+            CLEAR lv_pending_list.
+
+            LOOP AT lt_gi_status INTO ls_gi_status.
+              IF sy-tabix = 1.
+                lv_pending_list = ls_gi_status-vbeln.
+              ELSE.
+                CONCATENATE lv_pending_list ', ' ls_gi_status-vbeln
+                  INTO lv_pending_list.
+              ENDIF.
+
+              " Limit message length
+              IF strlen( lv_pending_list ) > 200.
+                CONCATENATE lv_pending_list '...' INTO lv_pending_list.
+                EXIT.
+              ENDIF.
+            ENDLOOP.
+
+            " Display error message
+            lw_return-type    = 'E'.
+            lw_return-id      = 'ZSCM_GI_MSG'.
+            lw_return-number  = '012'.
+            CONCATENATE 'GI for reporting number' i_report_no
+                        'is not yet completed in EWM.'
+                        'Pending deliveries:' lv_pending_list
+              INTO lw_return-message SEPARATED BY space.
+            APPEND lw_return TO et_return.
+
+            " Stop processing - do NOT proceed with RPU logic
+            PERFORM deque_area_and_report USING i_area i_report_no.
+            RETURN.
+
+          ELSE.
+            " GI is complete - proceed with normal flow
+            lw_return-type    = 'I'.
+            lw_return-id      = 'ZSCM_GI_MSG'.
+            lw_return-number  = '013'.
+            lw_return-message = 'GI status validated successfully.'.
+            APPEND lw_return TO et_return.
+
+          ENDIF.
+
+        ENDIF.
+      ENDIF.
+    ENDIF.
+  ENDIF.
+
+*&---------------------------------------------------------------------*
+*& End of Enhancement: GI Status Validation
+*&---------------------------------------------------------------------*
+
+  IF lw_zlog_prog_table IS NOT INITIAL.
+" soc by omkar more on 20.11.2025 CD:8085981 TR:RD2K9A5D5L
+    CLEAR lv_name.
+    SELECT name FROM ZLOG_EXEC_VAR CLIENT SPECIFIED UP TO 1 ROWS
+    INTO  lv_name
+    WHERE mandt  = sy-mandt
+    AND   name   = lc_zscm_rpu_new_logic
+    AND   active = abap_true.
+    ENDSELECT.
+    IF sy-subrc = 0 AND i_area IS NOT INITIAL AND i_report_no IS NOT INITIAL.
+      REFRESH lt_yttstx0002.
+      SELECT area
+             report_no
+             delivery FROM yttstx0002 CLIENT SPECIFIED
+      INTO TABLE lt_yttstx0002
+      WHERE mandt     = sy-mandt
+      AND   area      = i_area
+      AND   report_no = i_report_no.
+      IF sy-subrc = 0.
+
+        DELETE lt_yttstx0002 WHERE delivery IS INITIAL.
+        SORT   lt_yttstx0002 BY delivery.
+        DELETE ADJACENT DUPLICATES FROM lt_yttstx0002 COMPARING delivery.
+        IF lt_yttstx0002 IS NOT INITIAL.
+          SELECT  mandt
+                  packing_type
+                  vbeln
+                  exidv
+                  counter
+                  rpu_mblnr
+                  cncl_mblnr
+                  pick_cancel
+          FROM zscm_palet_ledgr CLIENT SPECIFIED
+          INTO TABLE lt_zscm_palet_ledgr
+          FOR ALL ENTRIES IN lt_yttstx0002
+          WHERE mandt = sy-mandt
+          AND   vbeln = lt_yttstx0002-delivery.
+          IF sy-subrc = 0.
+
+            DELETE lt_zscm_palet_ledgr WHERE cncl_mblnr IS NOT INITIAL OR pick_cancel IS NOT INITIAL.
+            LOOP AT lt_zscm_palet_ledgr INTO lw_zscm_palet_ledgr WHERE rpu_mblnr IS INITIAL.
+              lw_return-type    = 'E'.
+              lw_return-message = |{ TEXT-099 } { lw_zscm_palet_ledgr-vbeln }|.
+              APPEND lw_return TO et_return.
+              CLEAR  lw_return.
+            ENDLOOP.
+          ENDIF.
+        ENDIF.
+      ENDIF.
+" eoc by omkar more on 20.11.2025 CD:8085981 TR:RD2K9A5D5L
+    ELSE.
+
+    CALL FUNCTION 'Z_SCM_RPU_GET_AND_POST'
+      EXPORTING
+        i_area      = i_area
+        i_report_no = i_report_no
+      IMPORTING
+        et_return   = et_return.
+
+    ENDIF.
+
+    CLEAR: lw_return.
+    READ TABLE et_return INTO lw_return WITH KEY type = gc_e.
+
+    IF sy-subrc NE 0.
+
+      REFRESH: lt_output,lt_log.
+      CALL FUNCTION 'Z_PTC_FIORI_BILLING'
+        EXPORTING
+          im_area      = i_area
+          im_report_no = i_report_no
+        IMPORTING
+          ex_output    = lt_output
+          ex_log       = lt_log.
+
+      IF lt_log IS NOT INITIAL.
+        CLEAR: lw_log_s.
+        LOOP AT lt_log INTO lw_log_s.
+          CLEAR: lw_return.
+          lw_return-type = lw_log_s-type.
+          lw_return-message = lw_log_s-message.
+          APPEND lw_return TO et_return.
+          CLEAR: lw_return.
+        ENDLOOP.
+
+      ELSEIF lt_output IS NOT INITIAL.
+
+        CALL FUNCTION 'Z_SCM_YTTS_UPDATE'
+          EXPORTING
+            it_fiori_billing = lt_output
+            it_log           = lt_log
+          IMPORTING
+            et_return        = lt_ret1.
+
+        APPEND LINES OF lt_ret1 TO et_return.
+
+        CLEAR: lw_return.
+        IF lt_ret1 IS NOT INITIAL.
+          CLEAR: lw_output_s.
+          LOOP AT lt_output INTO lw_output_s.
+            READ TABLE lt_ret1 INTO lw_return WITH KEY type = 'S'
+                                                       message_v1 = lw_output_s-billno .
+            IF sy-subrc EQ 0.
+              lw_invlist-vbeln = lw_output_s-billno.
+              APPEND lw_invlist TO et_invlist.
+              CLEAR:lw_invlist.
+            ENDIF.
+
+            CLEAR: lw_output_s.
+          ENDLOOP.
+        ENDIF.
+
+      ENDIF.
+    ENDIF.
+
+  ELSE.
+
+    CLEAR lw_objectkey.
+    CONCATENATE 'Area of Location - TTS : -' i_area 'Warehouse' i_lgnum 'Truck Reporting Serial Id' i_report_no INTO lw_objectkey.
+    CALL FUNCTION 'Z_APPLICATION_LOG_CREATE'
+      EXPORTING
+        i_objectkey = lw_objectkey
+        i_object    = lc_object
+        i_subobject = lc_subobject
+        it_return   = lt_return_log.
+
+    UNPACK i_report_no TO i_report_no.
+
+    CALL FUNCTION 'Z_LOG_FIORI_GET_PLANT'
+      EXPORTING
+        i_lgnum      = i_lgnum
+      IMPORTING
+        e_werks      = gw_fdc
+        e_depot_flag = lw_depot_flag.
+
+    SELECT area
+           report_no
+           item_no
+           dlivry_no
+           posnr
+           vbeln
+           vbpos
+           ebeln
+           ebelp
+           mat_code
+           lr_no
+           lr_dt
+           delivery
+           billno
+           invoice_no
+           FROM yttstx0002
+           INTO TABLE lt_ytts2
+           WHERE area      EQ i_area
+             AND report_no EQ i_report_no.
+    IF sy-subrc NE 0.
+      lw_return-type    = gc_e.
+      lw_return-message = text-023.
+      APPEND lw_return TO et_return.
+      PERFORM deque_area_and_report USING i_area i_report_no.
+      RETURN.
+    ELSE.
+*    delete lt_ytts2 where billno is not initial.
+      IF lt_ytts2[] IS INITIAL.
+        lw_return-type    = gc_e.
+        lw_return-message = text-042.
+        APPEND lw_return TO et_return.
+        PERFORM deque_area_and_report USING i_area i_report_no.
+        RETURN.
+      ENDIF.
+    ENDIF.
+
+    REFRESH: lt_ytts2_t[].
+    lt_ytts2_t[] = lt_ytts2[].
+
+    SORT lt_ytts2_t BY delivery.
+    DELETE ADJACENT DUPLICATES FROM lt_ytts2_t COMPARING delivery.
+
+    "@ Added by sonu Kumar on 04.12.2018
+
+
+    "@ Get all the billing document for deliveries
+    SELECT vbelv posnv vbeln posnn vbtyp_n
+      FROM vbfa CLIENT SPECIFIED
+      INTO TABLE lt_vbfa
+      FOR ALL ENTRIES IN lt_ytts2_t
+      WHERE mandt = sy-mandt
+      AND   vbelv = lt_ytts2_t-delivery
+      AND   vbtyp_n IN ('M','U').
+    IF sy-subrc EQ 0.
+
+      lt_vbfa_t = lt_vbfa.
+      SORT lt_vbfa BY vbeln.
+
+      SORT lt_vbfa_t BY vbeln.
+      DELETE lt_vbfa_t WHERE vbeln IS INITIAL.
+      DELETE ADJACENT DUPLICATES FROM lt_vbfa_t COMPARING vbeln.
+
+      "@ Fetch billing status
+      IF lt_vbfa_t IS NOT INITIAL.
+        SELECT vbeln fksto
+          FROM vbrk CLIENT SPECIFIED
+          INTO TABLE lt_vbrk
+          FOR ALL ENTRIES IN lt_vbfa_t
+          WHERE mandt = sy-mandt
+          AND   vbeln = lt_vbfa_t-vbeln.
+        IF sy-subrc EQ 0.
+          SORT lt_vbrk BY fksto.
+          DELETE lt_vbrk WHERE fksto IS NOT INITIAL.
+          SORT lt_vbrk BY vbeln.
+        ENDIF.
+      ENDIF.
+      CLEAR lt_vbfa_t.
+    ENDIF.
+
+    "@ Get those deliveries bill doc no. which already generated
+    LOOP AT lt_vbrk INTO lw_vbrk.
+      READ TABLE lt_vbfa INTO lw_vbfa WITH KEY vbeln = lw_vbrk-vbeln BINARY SEARCH.
+      IF sy-subrc EQ 0.
+        READ TABLE lt_ytts2 ASSIGNING <lfs_ytts2> WITH KEY delivery = lw_vbfa-vbelv.
+        IF sy-subrc EQ 0.
+          <lfs_ytts2>-billno = lw_vbrk-vbeln.
+        ENDIF.
+      ENDIF.
+    ENDLOOP.
+
+    "@ Get all the deliveries for rpu checking
+    LOOP AT lt_ytts2_t INTO lw_ytts2.
+      lw_vbeln-vbeln = lw_ytts2-delivery.
+      APPEND lw_vbeln TO lt_vbeln.
+      CLEAR lw_vbeln.
+    ENDLOOP.
+
+    "@ Checking delivery is applicable for RPU or not
+    IF lt_vbeln IS NOT INITIAL.
+      REFRESH: lt_rpu, lt_rpu_p.
+      CALL FUNCTION 'Z_LOG_GET_RPU_DETAILS'
+        EXPORTING
+          it_vbeln          = lt_vbeln
+        IMPORTING
+          et_return         = lt_return
+          et_rpu            = lt_rpu
+          et_ystkdtls_count = lt_rpu_p.
+
+      SELECT SINGLE repid
+                    lgnum
+                    zvariable1
+                    zvariable2
+                    zlow
+                    zhigh
+                    active_flag
+        FROM zlog_prog_table
+        INTO lw_prog_table
+        WHERE repid EQ lc_rpu_lock AND
+              active_flag EQ abap_true.
+      IF ( NOT lt_rpu IS INITIAL OR NOT lt_rpu_p IS INITIAL ) AND sy-subrc IS INITIAL.
+        REFRESH lt_rpu_t.
+        IF lt_rpu IS INITIAL.
+          lt_rpu_t = lt_rpu_p.
+        ELSE.
+          lt_rpu_t = lt_rpu.
+        ENDIF.
+        SORT lt_rpu_t BY pallet_m.
+        DELETE lt_rpu_t WHERE pallet_m IS INITIAL.
+        DELETE ADJACENT DUPLICATES FROM lt_rpu_t COMPARING pallet_m.
+        IF NOT lt_rpu_t IS INITIAL.
+          LOOP AT lt_rpu_t ASSIGNING <lfs_rpu>.
+            IF NOT <lfs_rpu>-pallet_m IS INITIAL.
+              CALL FUNCTION 'CONVERSION_EXIT_ALPHA_INPUT'
+                EXPORTING
+                  input  = <lfs_rpu>-pallet_m
+                IMPORTING
+                  output = <lfs_rpu>-pallet_m.
+            ENDIF.
+          ENDLOOP.
+          REFRESH lt_mard.
+          SELECT matnr werks lgort labst
+            FROM mard
+            INTO TABLE lt_mard
+            FOR ALL ENTRIES IN lt_rpu_t
+            WHERE matnr = lt_rpu_t-pallet_m AND
+                  werks = gw_fdc AND
+                  lgort = lc_lgort.
+          IF sy-subrc IS INITIAL.
+            SORT lt_mard BY matnr.
+            CLEAR: lw_flag_t, lw_labst.
+            LOOP AT lt_rpu_t INTO lw_rpu.
+              CLEAR lw_mard.
+              READ TABLE lt_mard INTO lw_mard WITH KEY matnr = lw_rpu-pallet_m BINARY SEARCH.
+              IF sy-subrc IS INITIAL AND lw_rpu-counts GT 0.
+                IF lw_rpu-counts LE lw_mard-labst.
+                  CLEAR lw_rpu.
+                ELSE.
+                  lw_labst = lw_rpu-counts - lw_mard-labst.
+                  lw_flag_t = abap_true.
+                  EXIT.
+                ENDIF.
+              ENDIF.
+            ENDLOOP.
+            IF NOT lw_flag_t IS INITIAL.
+              CLEAR lw_return.
+              lw_return-type    = gc_e.
+              CALL FUNCTION 'CONVERSION_EXIT_ALPHA_OUTPUT'
+                EXPORTING
+                  input  = lw_rpu-pallet_m
+                IMPORTING
+                  output = lw_rpu-pallet_m.
+              CONCATENATE 'deficit of ('lw_labst ') for material - ' lw_rpu-pallet_m
+              INTO lw_return-message.
+*            lw_return-message = text-080.
+              APPEND lw_return TO et_return.
+              CLEAR lw_return.
+              PERFORM deque_area_and_report USING i_area i_report_no.
+              RETURN.
+            ENDIF.
+            CLEAR lw_flag_t.
+            IF NOT lt_rpu_t IS INITIAL.
+              LOOP AT lt_rpu_t INTO lw_rpu.
+                IF NOT lw_rpu-pallet_m IS INITIAL AND NOT gw_fdc IS INITIAL.
+                  CALL FUNCTION 'ENQUEUE_EMMARCE'
+                    EXPORTING
+                      mode_marc      = 'E'
+                      mandt          = sy-mandt
+                      matnr          = lw_rpu-pallet_m
+                      werks          = gw_fdc
+*                     X_MATNR        = ' '
+*                     X_WERKS        = ' '
+                      _scope         = '2'
+*                     _WAIT          = ' '
+*                     _COLLECT       = ' '
+                    EXCEPTIONS
+                      foreign_lock   = 1
+                      system_failure = 2
+                      OTHERS         = 3.
+                  IF sy-subrc <> 0.
+                    lw_flag_t = abap_true.
+                    EXIT.
+                  ENDIF.
+                ENDIF.
+              ENDLOOP.
+              PERFORM  dequeue_emmarae TABLES lt_rpu_t[]
+                                         USING gw_fdc.
+              IF NOT lw_flag_t IS INITIAL.
+                CLEAR lw_return.
+                lw_return-type    = gc_e.
+                SHIFT lw_rpu-pallet_m LEFT DELETING LEADING '0'.
+                CONCATENATE 'RPU material -' lw_rpu-pallet_m 'And plant - '  gw_fdc 'is locked in ID' '-'  sy-msgv1 INTO lw_return-message SEPARATED BY space.
+                APPEND lw_return TO et_return.
+                CLEAR lw_return.
+                PERFORM deque_area_and_report USING i_area i_report_no.
+                RETURN.
+              ENDIF.
+            ENDIF.
+          ENDIF.
+        ENDIF.
+      ENDIF.
+      IF lt_rpu IS NOT INITIAL OR NOT lt_rpu_p IS INITIAL.
+        SORT lt_rpu BY vbeln.
+        DELETE ADJACENT DUPLICATES FROM lt_rpu COMPARING vbeln.
+
+        LOOP AT lt_rpu INTO lw_rpu.
+          CLEAR lw_objectkey.
+          lw_objectkey = lw_rpu-vbeln.
+          lw_return-type    = 'S'.
+          lw_return-id      = '00'.
+          lw_return-number  = '001'.
+          lw_return-message = 'Billing Document'.
+          APPEND lw_return TO lt_return_log.
+
+          CALL FUNCTION 'Z_APPLICATION_LOG_CREATE'
+            EXPORTING
+              i_objectkey = lw_objectkey
+              i_object    = lc_object
+              i_subobject = lc_subobject
+              it_return   = lt_return_log.
+          APPEND lw_rpu-vbeln TO lt_xblnr.
+          CLEAR lw_rpu.
+        ENDLOOP.
+
+        LOOP AT lt_rpu_p INTO lw_rpu_p.
+          CLEAR lw_objectkey.
+          lw_objectkey = lw_rpu_p-vbeln.
+          lw_return-type    = 'S'.
+          lw_return-id      = '00'.
+          lw_return-number  = '001'.
+          lw_return-message = 'Billing Document'.
+          APPEND lw_return TO lt_return_log.
+
+          CALL FUNCTION 'Z_APPLICATION_LOG_CREATE'
+            EXPORTING
+              i_objectkey = lw_objectkey
+              i_object    = lc_object
+              i_subobject = lc_subobject
+              it_return   = lt_return_log.
+          APPEND lw_rpu_p-vbeln TO lt_xblnr.
+          CLEAR lw_rpu_p.
+        ENDLOOP.
+        SORT lt_xblnr BY table_line.
+        DELETE ADJACENT DUPLICATES FROM lt_xblnr COMPARING table_line.
+        "@ Checking whether RPU done or not
+        IF lt_xblnr IS NOT INITIAL.
+          SELECT bwart xblnr
+            FROM zmkpf_mseg CLIENT SPECIFIED
+            INTO TABLE lt_zmkpf_mseg
+            FOR ALL ENTRIES IN lt_xblnr
+            WHERE mandt = sy-mandt
+            AND   bwart IN (lc_bwart_621,lc_bwart_303) "'621','303'
+            AND   xblnr = lt_xblnr-table_line.
+          IF sy-subrc EQ 0.
+            SORT lt_zmkpf_mseg BY xblnr.
+          ENDIF.
+        ENDIF.
+        CLEAR lt_xblnr.
+
+        "@ Preparing those deliveries which is pending for RPU
+        LOOP AT lt_vbeln INTO lw_vbeln.
+          lw_xblnr = lw_vbeln-vbeln.
+          READ TABLE lt_rpu INTO lw_rpu WITH KEY vbeln = lw_vbeln-vbeln.
+          IF sy-subrc EQ 0.
+            READ TABLE lt_zmkpf_mseg INTO lw_zmkpf_mseg WITH KEY xblnr = lw_xblnr.
+            IF sy-subrc NE 0.
+              lw_rpu_pending-vbeln = lw_vbeln-vbeln.
+              lw_rpu_pending-ind   = abap_true.
+              APPEND lw_rpu_pending TO lt_rpu_pending.
+              CLEAR lw_rpu_pending.
+            ENDIF.
+            CLEAR: lw_xblnr,lw_vbeln.
+          ELSE.
+            READ TABLE lt_rpu_p INTO lw_rpu_p WITH KEY vbeln = lw_vbeln-vbeln.
+            IF sy-subrc IS INITIAL.
+              READ TABLE lt_zmkpf_mseg INTO lw_zmkpf_mseg WITH KEY xblnr = lw_xblnr.
+              IF sy-subrc NE 0.
+                lw_rpu_pending-vbeln = lw_vbeln-vbeln.
+                lw_rpu_pending-ind   = abap_true.
+                APPEND lw_rpu_pending TO lt_rpu_pending.
+                CLEAR lw_rpu_pending.
+              ENDIF.
+              CLEAR: lw_xblnr,lw_vbeln.
+            ENDIF.
+          ENDIF.
+        ENDLOOP.
+      ENDIF.
+    ENDIF.
+
+    "@ If Billing is done and RPU is applicable and RPU is not done yet
+    "  then need to consider those record
+
+    SORT lt_rpu_pending BY vbeln.
+    lt_ytts2_temp = lt_ytts2.
+    LOOP AT lt_ytts2_temp INTO lw_ytts2.
+      IF lw_ytts2-billno IS NOT INITIAL.
+        READ TABLE lt_rpu_pending TRANSPORTING NO FIELDS WITH KEY vbeln = lw_ytts2-delivery BINARY SEARCH.
+        IF sy-subrc NE 0.
+          DELETE lt_ytts2 WHERE report_no = lw_ytts2-report_no
+                          AND   delivery  = lw_ytts2-delivery
+                          AND   billno    = lw_ytts2-billno.
+        ENDIF.
+      ENDIF.
+    ENDLOOP.
+    REFRESH lt_ytts2_temp.
+
+    "@ End of changes by Sonu Kumar
+
+    IF lt_ytts2_t IS NOT INITIAL.
+
+      SELECT vbeln
+             vstel
+             fkarv
+             vkoiv
+             wadat_ist
+             FROM likp INTO TABLE lt_likp
+             FOR ALL ENTRIES IN lt_ytts2_t
+             WHERE vbeln EQ lt_ytts2_t-delivery.
+      IF sy-subrc EQ 0 AND lt_likp IS NOT INITIAL.
+        SORT lt_likp BY vbeln.
+
+        SELECT vbeln
+               posnr
+               lfimg
+               FROM lips INTO TABLE lt_lips
+               FOR ALL ENTRIES IN lt_likp
+               WHERE vbeln EQ lt_likp-vbeln.
+        IF sy-subrc EQ 0.
+          SORT lt_lips BY vbeln posnr.
+        ENDIF.
+
+      ENDIF.
+
+    ENDIF.
+
+    REFRESH: lt_ytts2_t[].
+    lt_ytts2_t[] = lt_ytts2[].
+
+    DELETE lt_ytts2_t WHERE dlivry_no IS INITIAL.
+    SORT lt_ytts2_t BY dlivry_no.
+    DELETE ADJACENT DUPLICATES FROM lt_ytts2_t COMPARING dlivry_no.
+
+    IF lt_ytts2_t IS NOT INITIAL.
+
+      SELECT vbeln
+             posnr
+             matnr
+             FROM vbap INTO TABLE lt_vbap
+             FOR ALL ENTRIES IN lt_ytts2_t
+             WHERE vbeln EQ lt_ytts2_t-dlivry_no.
+      IF sy-subrc EQ 0.
+        SORT lt_vbap BY vbeln.
+      ENDIF.
+
+      SELECT vbeln
+             posnr
+             inco1
+             FROM vbkd INTO TABLE lt_vbkd
+             FOR ALL ENTRIES IN lt_ytts2_t
+             WHERE vbeln EQ lt_ytts2_t-dlivry_no.
+      IF sy-subrc EQ 0.
+        SORT lt_vbkd BY vbeln.
+      ENDIF.
+
+    ENDIF.
+
+    REFRESH: lt_ytts2_t[].
+    lt_ytts2_t[] = lt_ytts2[].
+
+    DELETE lt_ytts2_t WHERE ebeln IS INITIAL.
+    SORT lt_ytts2_t BY ebeln.
+    DELETE ADJACENT DUPLICATES FROM lt_ytts2_t COMPARING ebeln.
+
+    IF lt_ytts2_t IS NOT INITIAL.
+
+      SELECT ebeln
+             inco1
+             FROM ekko INTO TABLE lt_ekko
+             FOR ALL ENTRIES IN lt_ytts2_t
+             WHERE ebeln EQ lt_ytts2_t-ebeln.
+      IF sy-subrc EQ 0.
+        SORT lt_ekko BY ebeln.
+
+        SELECT ebeln
+               ebelp
+               matnr
+               inco1
+               FROM ekpo INTO TABLE lt_ekpo
+               FOR ALL ENTRIES IN lt_ekko
+               WHERE ebeln EQ lt_ekko-ebeln.
+        IF sy-subrc EQ 0.
+          SORT lt_ekpo BY ebeln.
+        ENDIF.
+      ENDIF.
+
+    ENDIF.
+
+    READ TABLE lt_vbap INTO lw_vbap INDEX 1.
+    IF sy-subrc EQ 0 AND lw_vbap-matnr IS NOT INITIAL.
+
+      lw_matnr = lw_vbap-matnr.
+
+      SELECT SINGLE
+             spart
+             mprof
+             FROM mara
+             INTO (lw_spart,lw_mprof)
+             WHERE matnr EQ lw_vbap-matnr.
+      IF sy-subrc NE 0.
+        CLEAR: lw_spart.
+      ENDIF.
+
+    ELSE.
+
+      READ TABLE lt_ekpo INTO lw_ekpo INDEX 1.
+      IF sy-subrc EQ 0 AND lw_ekpo-matnr IS NOT INITIAL.
+
+        lw_matnr = lw_vbap-matnr.
+
+        SELECT SINGLE
+               spart
+               mprof
+               FROM mara
+               INTO (lw_spart,lw_mprof)
+               WHERE matnr EQ lw_ekpo-matnr.
+        IF sy-subrc NE 0.
+          CLEAR: lw_spart.
+        ENDIF.
+
+      ENDIF.
+
+    ENDIF.
+
+    LOOP AT lt_likp INTO lw_likp.
+
+      IF lw_likp-vstel IS INITIAL.
+        CONTINUE.
+      ENDIF.
+
+      lw_vstel_s-sign   = gc_i.
+      lw_vstel_s-option = gc_eq.
+      lw_vstel_s-low    = lw_likp-vstel.
+
+      APPEND lw_vstel_s TO lt_vstel_s.
+      CLEAR: lw_vstel_s,lw_likp.
+    ENDLOOP.
+
+    SORT lt_vstel_s BY low.
+    DELETE ADJACENT DUPLICATES FROM lt_vstel_s COMPARING low.
+
+    IF lt_vstel_s IS NOT INITIAL.
+      SELECT werks
+             bwkey
+             FROM t001w INTO TABLE lt_t001w
+             WHERE werks IN lt_vstel_s.
+      IF sy-subrc EQ 0.
+        SELECT bwkey
+               bukrs
+               FROM t001k INTO TABLE lt_t001k
+               FOR ALL ENTRIES IN lt_t001w
+               WHERE bwkey EQ lt_t001w-bwkey.
+        IF sy-subrc EQ 0.
+          SORT lt_t001k BY bwkey bukrs.
+        ENDIF.
+      ENDIF.
+    ENDIF.
+
+    IF /rgcs/cl_gst=>active EQ abap_false. "pwc_056 22.04.2017 GST
+
+      SELECT zsaltyp
+             exgrp
+             srgrp
+             FROM ysexcsrgrp
+             INTO TABLE lt_xexcgrp
+             WHERE werks EQ gw_fdc
+               AND spart EQ lw_spart.
+      IF sy-subrc NE 0.
+
+        lw_return-type    = gc_e.
+        lw_return-message = text-026.
+        APPEND lw_return TO et_return.
+        PERFORM deque_area_and_report USING i_area i_report_no.
+        RETURN.
+      ELSE.
+
+        LOOP AT lt_xexcgrp INTO lw_xexcgrp.
+
+          IF lw_xexcgrp-exgrp IS NOT INITIAL.
+            lw_exgrp-sign   = gc_i.
+            lw_exgrp-option = gc_eq.
+            lw_exgrp-low    = lw_xexcgrp-exgrp.
+            APPEND lw_exgrp TO lt_exgrp.
+          ENDIF.
+
+          CLEAR: lw_exgrp,lw_xexcgrp.
+        ENDLOOP.
+
+        IF lt_exgrp IS NOT INITIAL.
+
+          SELECT *
+                 FROM zcinparam INTO TABLE lt_exgrpop
+                 WHERE param1 EQ lc_ysexcsrgrp
+                   AND param2 EQ lc_oldexgrp
+                   AND param3 IN lt_exgrp
+                   AND active_flag EQ abap_true.
+          IF sy-subrc EQ 0.
+            SORT lt_exgrpop BY param1 param2 param3.
+          ENDIF.
+
+        ENDIF.
+
+      ENDIF.
+
+      LOOP AT lt_xexcgrp INTO lw_xexcgrp.
+        READ TABLE lt_exgrpop INTO lw_exgrpop
+                              WITH KEY param1 = lc_ysexcsrgrp
+                                       param2 = lc_oldexgrp
+                                       param3 = lw_xexcgrp-exgrp
+                                       BINARY SEARCH.
+        IF sy-subrc EQ 0 AND lw_exgrpop-value1 IS NOT INITIAL.
+          lw_xexcgrp-exgrp = lw_exgrpop-value1.
+          APPEND lw_xexcgrp TO lt_xexcgrp_t.
+        ENDIF.
+
+        CLEAR: lw_xexcgrp,lw_exgrpop.
+      ENDLOOP.
+
+      IF lt_xexcgrp_t IS NOT INITIAL.
+        APPEND LINES OF lt_xexcgrp_t TO lt_xexcgrp.
+      ENDIF.
+
+      gt_xexcgrp[] = lt_xexcgrp[].
+
+    ENDIF.
+
+    SORT lt_t001w BY werks.
+
+    LOOP AT lt_ytts2 INTO lw_ytts2.
+
+      lw_invgen-area        = lw_ytts2-area.
+      lw_invgen-report_no   = lw_ytts2-report_no.
+      lw_invgen-delivery    = lw_ytts2-delivery.
+      lw_invgen-invoice_no  = lw_ytts2-invoice_no.
+      lw_invgen-lr_no       = lw_ytts2-lr_no.
+      lw_invgen-lr_dt       = lw_ytts2-lr_dt.
+      lw_invgen-spart       = lw_spart.
+
+      "@ Added by Sonu Kumar on 05.12.2018
+      READ TABLE lt_rpu_pending TRANSPORTING NO FIELDS WITH KEY vbeln = lw_ytts2-delivery
+                                                                  BINARY SEARCH.
+      IF sy-subrc EQ 0.
+        IF lw_ytts2-billno IS NOT INITIAL.
+          lw_invgen-billno  = lw_ytts2-billno.
+          lw_invgen-status  = 'S'.
+        ENDIF.
+        lw_invgen-rpu_applicable = abap_true.
+      ELSE.
+        lw_invgen-rpu_applicable = abap_false.
+      ENDIF.
+      "@ End of changes by sonu kumar
+
+
+      READ TABLE lt_vbap INTO lw_vbap
+                         WITH KEY vbeln = lw_ytts2-dlivry_no
+                         BINARY SEARCH.
+      IF sy-subrc EQ 0.
+        lw_invgen-matnr       = lw_vbap-matnr.
+        lw_invgen-dlivry_no   = lw_ytts2-dlivry_no.
+        lw_invgen-posnr       = lw_ytts2-posnr.
+        lw_invgen-sosto       = 'SO'.
+
+        READ TABLE lt_vbkd INTO lw_vbkd
+                           WITH KEY vbeln = lw_ytts2-dlivry_no
+                           BINARY SEARCH.
+        IF sy-subrc EQ 0.
+          lw_invgen-inco1 = lw_vbkd-inco1.
+        ENDIF.
+
+      ELSE.
+        READ TABLE lt_ekpo INTO lw_ekpo
+                           WITH KEY ebeln = lw_ytts2-ebeln
+                           BINARY SEARCH.
+        IF sy-subrc EQ 0.
+          lw_invgen-matnr       = lw_ekpo-matnr.
+          lw_invgen-dlivry_no   = lw_ytts2-ebeln.
+          lw_invgen-posnr       = lw_ytts2-ebelp.
+          lw_invgen-sosto       = 'STO'.
+          lw_invgen-inco1       = lw_ekpo-inco1.
+
+          IF lw_invgen-inco1 IS INITIAL.
+            READ TABLE lt_ekpo INTO lw_ekpo
+                               WITH KEY ebeln = lw_ytts2-ebeln
+                               BINARY SEARCH.
+            IF sy-subrc EQ 0.
+              lw_invgen-inco1       = lw_ekko-inco1.
+            ENDIF.
+          ENDIF.
+        ENDIF.
+      ENDIF.
+
+      READ TABLE lt_likp INTO lw_likp
+                         WITH KEY vbeln = lw_ytts2-delivery
+                         BINARY SEARCH.
+      IF sy-subrc EQ 0.
+        lw_invgen-fkarv = lw_likp-fkarv.
+        lw_invgen-vkoiv = lw_likp-vkoiv.
+        lw_invgen-wadat_ist = lw_likp-wadat_ist.
+
+        READ TABLE lt_t001w INTO lw_t001w
+                            WITH KEY werks = lw_likp-vstel
+                            BINARY SEARCH.
+        IF sy-subrc EQ 0.
+          READ TABLE lt_t001k INTO lw_t001k
+                              WITH KEY bwkey = lw_t001w-bwkey
+                              BINARY SEARCH.
+          IF sy-subrc EQ 0.
+            lw_invgen-bukrs = lw_t001k-bukrs.
+          ENDIF.
+        ENDIF.
+      ENDIF.
+
+      CLEAR: lw_tabix.
+      READ TABLE lt_lips INTO lw_lips_t
+                         WITH KEY vbeln = lw_ytts2-delivery
+                         BINARY SEARCH.
+      IF sy-subrc EQ 0.
+        lw_tabix = sy-tabix.
+
+        LOOP AT lt_lips INTO lw_lips FROM lw_tabix.
+          IF lw_lips_t-vbeln NE  lw_lips-vbeln.
+            EXIT.
+          ENDIF.
+          lw_invgen-lfimg = lw_lips-lfimg + lw_invgen-lfimg.
+        ENDLOOP.
+
+      ENDIF.
+
+      APPEND lw_invgen TO lt_invgen.
+      CLEAR: lw_ytts2,lw_invgen,lw_vbap,lw_tabix,
+             lw_lips,lw_likp,lw_lips_t.
+
+    ENDLOOP.
+
+
+    REFRESH: lt_exgrp.
+    LOOP AT lt_xexcgrp INTO lw_xexcgrp.
+
+      IF lw_xexcgrp-exgrp IS NOT INITIAL.
+        lw_exgrp-sign   = gc_i.
+        lw_exgrp-option = gc_eq.
+        lw_exgrp-low    = lw_xexcgrp-exgrp.
+        APPEND lw_exgrp TO lt_exgrp.
+      ENDIF.
+
+      CLEAR: lw_exgrp,lw_xexcgrp.
+    ENDLOOP.
+
+    IF /rgcs/cl_gst=>active EQ abap_false. "pwc_056 26.04.2017 GST
+
+      REFRESH: lt_invgen_t.
+      lt_invgen_t = lt_invgen.
+      DELETE lt_invgen_t WHERE invoice_no IS INITIAL.
+      SORT lt_invgen_t BY invoice_no.
+      DELETE ADJACENT DUPLICATES FROM lt_invgen_t COMPARING invoice_no.
+
+      IF lt_invgen_t IS NOT INITIAL.
+
+        SELECT trntyp
+               docyr
+               docno
+               zeile
+               exnum
+               exgrp
+               lgort
+               matnr
+               status
+               addldata4
+               FROM j_1iexcdtl INTO TABLE gt_1iexcdtl
+               FOR ALL ENTRIES IN lt_invgen_t
+               WHERE exnum EQ lt_invgen_t-invoice_no
+                 AND exgrp IN lt_exgrp
+                 AND matnr EQ lt_invgen_t-matnr.
+        IF sy-subrc EQ 0.
+          DELETE gt_1iexcdtl WHERE status EQ gc_d
+                                OR status EQ gc_r.
+
+        ENDIF.
+
+      ENDIF.
+
+    ENDIF.
+
+    " Check if ZPARAM contains active record to perform IV Billing
+    SELECT *
+           FROM zparam
+           INTO TABLE gt_zparam
+           WHERE param1      EQ 'ZIFDCDES3'
+             AND value1      EQ gw_fdc
+             AND active_flag EQ abap_true.
+    IF sy-subrc EQ 0.
+      SORT gt_zparam.
+    ENDIF.
+
+    " Check ZPTC_PARAM1 LR Creation
+    SELECT *
+           FROM zptc_param1
+           INTO TABLE gt_zparam_lr
+           WHERE param1      EQ 'FCPL_LR_NO'
+             AND param2      EQ 'INCO1'
+             AND active_flag EQ abap_true.
+    IF sy-subrc EQ 0.
+      SORT gt_zparam_lr.
+    ENDIF.
+
+    REFRESH: lt_invgen_t.
+    lt_invgen_t = lt_invgen.
+    DELETE lt_invgen_t WHERE delivery IS INITIAL.
+    SORT lt_invgen_t BY delivery.
+    DELETE ADJACENT DUPLICATES FROM lt_invgen_t COMPARING delivery.
+
+    IF lt_invgen_t IS NOT INITIAL.
+
+      SELECT vbeln
+             FROM vbrp
+             INTO TABLE lt_vbrp
+             FOR ALL ENTRIES IN lt_invgen_t
+             WHERE vgbel EQ lt_invgen_t-delivery.
+      IF sy-subrc EQ 0 AND lt_vbrp IS NOT INITIAL.
+        SORT lt_vbrp BY vbeln.
+        DELETE ADJACENT DUPLICATES FROM lt_vbrp COMPARING vbeln.
+
+        SELECT vbeln
+               fkart
+               vbtyp
+               rfbsk
+               fksto
+               FROM vbrk
+               INTO TABLE gt_vbrk
+               FOR ALL ENTRIES IN lt_vbrp
+               WHERE vbeln = lt_vbrp-vbeln.
+        IF sy-subrc EQ 0.
+          DELETE gt_vbrk WHERE fksto EQ gc_x.
+          DELETE gt_vbrk WHERE vbtyp EQ gc_n OR vbtyp EQ gc_6.
+          DELETE gt_vbrk WHERE rfbsk EQ gc_e.
+        ENDIF.
+      ENDIF.
+
+      IF /rgcs/cl_gst=>active EQ abap_false. "pwc_056 26.04.2017 GST
+
+        SELECT vbeln
+               exnum
+               depexnum
+               status
+               FROM j_1irg23d
+               INTO TABLE gt_rg23d
+               FOR ALL ENTRIES IN lt_invgen_t
+               WHERE vbeln EQ lt_invgen_t-delivery
+                 AND exnum EQ lt_invgen_t-invoice_no.
+        IF sy-subrc = 0.
+          DELETE gt_rg23d WHERE status NE 'P'.
+          SORT gt_rg23d BY vbeln exnum.
+        ENDIF.
+
+      ENDIF.
+
+    ENDIF.
+
+    SELECT repid
+           lgnum
+           zvariable1
+           zvariable2
+           zlow
+           zhigh
+           active_flag
+           FROM zlog_prog_table CLIENT SPECIFIED
+           INTO TABLE lt_prog_table
+           WHERE mandt = sy-mandt
+           AND repid = 'SWH_DEL_CLUBBING'
+           AND zvariable2 = 'SPART'
+           AND active_flag = abap_true.
+    IF sy-subrc = 0.
+      lw_spart_r-sign = 'I'.
+      lw_spart_r-option = 'EQ'.
+      LOOP AT lt_prog_table INTO lw_prog_table.
+        lw_spart_r-low = lw_prog_table-zhigh.
+        APPEND lw_spart_r TO lr_spart_r.
+        CLEAR:lw_spart_r-low,lw_prog_table.
+      ENDLOOP.
+      CLEAR:lw_spart_r.
+    ENDIF.
+
+
+    "BOC by Ketan Bhor on 02.09.2021  for CD: 8052002
+    CLEAR:lt_invgen_spart.
+    lt_invgen_spart = lt_invgen.
+    DELETE lt_invgen_spart WHERE spart NOT IN lr_spart_r. "<> 16.
+    DELETE lt_invgen WHERE spart IN lr_spart_r.            "= 16.
+    "EOC by Ketan Bhor on 02.09.2021  for CD: 8052002
+
+    LOOP AT lt_invgen ASSIGNING <lfs_invgen>.
+
+      IF /rgcs/cl_gst=>active EQ abap_false.  "pwc_056 22.04.2017 GST
+        PERFORM create_invoice USING lt_lips
+                            CHANGING <lfs_invgen>.
+      ENDIF.
+
+      IF <lfs_invgen>-status EQ gc_s OR /rgcs/cl_gst=>active EQ abap_true. " pwc_056 27.06.2017
+        PERFORM create_billdoc CHANGING <lfs_invgen>.
+
+        IF <lfs_invgen>-status EQ gc_s.
+          PERFORM generate_lrno CHANGING <lfs_invgen>.
+        ENDIF.
+      ENDIF.
+
+    ENDLOOP.
+
+    "BOC by Ketan Bhor on 02.09.2021  for CD: 8052002
+    CLEAR:lt_billingdatain.
+    LOOP AT lt_invgen_spart ASSIGNING <lfs_invgen>.
+      CLEAR:lw_sydate,lw_symdate.
+      IF <lfs_invgen>-status EQ gc_s OR /rgcs/cl_gst=>active EQ abap_true.
+
+        CONCATENATE sy-datum sy-uzeit INTO lw_sydate.
+        CONCATENATE <lfs_invgen>-wadat_ist '060000' INTO lw_symdate.
+        IF lw_sydate >= lw_symdate.
+          IF  <lfs_invgen>-billno IS INITIAL.
+            lw_billingdatain-ordbilltyp = <lfs_invgen>-fkarv.
+            lw_billingdatain-ref_doc    = <lfs_invgen>-delivery.
+            lw_billingdatain-ref_doc_ca = gc_j.
+            APPEND lw_billingdatain TO lt_billingdatain.
+            CLEAR:lw_billingdatain.
+          ENDIF.
+        ELSE.
+          <lfs_invgen>-status = gc_e.
+        ENDIF.
+      ENDIF.
+    ENDLOOP.
+
+    CLEAR:lt_ret,lw_status,lw_billno,lw_rpu_applicable.
+    IF lt_billingdatain IS NOT INITIAL.
+
+      CALL FUNCTION 'BAPI_BILLINGDOC_CREATEMULTIPLE'
+        TABLES
+          billingdatain = lt_billingdatain
+          return        = lt_ret
+          success       = lt_success.
+
+      READ TABLE lt_ret INTO lw_ret
+                       WITH KEY type = gc_e.
+      IF sy-subrc EQ 0.
+
+        CALL FUNCTION 'BAPI_TRANSACTION_ROLLBACK'.
+
+        lw_status      =   gc_e.
+        lw_message     =   lw_ret-message.
+
+      ELSE.
+
+        CALL FUNCTION 'BAPI_TRANSACTION_COMMIT'
+          EXPORTING
+            wait = 'X'.
+
+        READ TABLE lt_success INTO lw_success INDEX 1.
+        IF sy-subrc EQ 0.
+          lw_billno = lw_success-bill_doc.
+          lw_status = gc_s.
+          lw_rpu_applicable = abap_true.
+        ENDIF.
+
+      ENDIF.
+    ENDIF.
+
+    SORT  lt_success BY ref_doc.
+    LOOP AT lt_invgen_spart ASSIGNING <lfs_invgen>.
+      IF <lfs_invgen>-status EQ space AND  <lfs_invgen> IS ASSIGNED.
+        IF lw_status = gc_s.
+          READ TABLE lt_success  INTO lw_success WITH  KEY ref_doc = <lfs_invgen>-delivery
+                                                 BINARY SEARCH.
+          IF sy-subrc = 0.
+            <lfs_invgen>-billno = lw_success-bill_doc.
+          ELSE.
+            <lfs_invgen>-billno =  lw_billno.
+          ENDIF.
+
+          <lfs_invgen>-status = lw_status.
+          <lfs_invgen>-rpu_applicable = lw_rpu_applicable.
+        ELSE.
+          <lfs_invgen>-status = lw_status.
+          <lfs_invgen>-message = lw_message.
+        ENDIF.
+      ENDIF.
+
+      IF <lfs_invgen>-status EQ gc_s.
+        PERFORM generate_lrno CHANGING <lfs_invgen>.                "used existing old perform.
+      ENDIF.
+
+    ENDLOOP.
+
+    IF  lt_invgen_spart IS NOT INITIAL.
+      APPEND LINES OF lt_invgen_spart TO lt_invgen.
+    ENDIF.
+
+    "EOC by Ketan Bhor on 02.09.2021  for CD: 8052002
+
+    LOOP AT lt_invgen INTO lw_invgen.
+
+      IF lw_invgen-billno IS NOT INITIAL.
+        IF lw_invgen-lr_no IS INITIAL.
+          UPDATE yttstx0002
+           SET lr_no      = '.'
+               lr_dt      = lw_invgen-lr_dt
+               billno     = lw_invgen-billno
+               invoice_dt = sy-datum
+               invoice_tm = sy-uzeit
+        WHERE area       = lw_invgen-area
+          AND report_no  = lw_invgen-report_no
+          AND delivery   = lw_invgen-delivery.
+          IF sy-subrc EQ 0.
+            lw_invlist-vbeln = lw_invgen-billno.
+            lw_invlist-exnum = lw_invgen-exnum.
+            APPEND lw_invlist TO et_invlist.
+          ENDIF.
+        ELSE.
+          UPDATE yttstx0002
+             SET lr_no      = lw_invgen-lr_no
+                 lr_dt      = lw_invgen-lr_dt
+                 billno     = lw_invgen-billno
+                 invoice_dt = sy-datum
+                 invoice_tm = sy-uzeit
+                 gtabukrs   = 'FCPL'
+                 cn_dueliststat = 'PDFC' "CD:8023410 TR:RD2K9A1P11 ADDED BY FC SWATI CHAUHAN ON 25.07.2018
+           WHERE area       = lw_invgen-area
+             AND report_no  = lw_invgen-report_no
+             AND delivery   = lw_invgen-delivery.
+          IF sy-subrc EQ 0.
+            lw_invlist-vbeln = lw_invgen-billno.
+            lw_invlist-exnum = lw_invgen-exnum.
+            APPEND lw_invlist TO et_invlist.
+          ENDIF.
+        ENDIF.
+      ENDIF.
+
+      CLEAR: lw_invlist,lw_invgen.
+    ENDLOOP.
+
+    IF et_invlist IS NOT INITIAL.
+
+      READ TABLE lt_invgen TRANSPORTING NO FIELDS
+                           WITH KEY status = gc_e.
+      IF sy-subrc EQ 0.
+        lw_return-type    = gc_s.
+        lw_return-message = text-039.
+        APPEND lw_return TO et_return.
+      ELSE.
+        lw_return-type    = gc_s.
+        lw_return-message = text-040.
+        APPEND lw_return TO et_return.
+      ENDIF.
+
+    ELSE.
+
+      lw_return-type    = gc_e.
+      lw_return-message = text-041.
+      APPEND lw_return TO et_return.
+
+    ENDIF.
+
+    PERFORM deque_area_and_report USING i_area i_report_no.
+
+  ENDIF.
+ENDFUNCTION.
+*&---------------------------------------------------------------------*
+*&      Form  create_invoice
+*&---------------------------------------------------------------------*
+*       text
+*----------------------------------------------------------------------*
+FORM create_invoice USING lp_lips
+                 CHANGING lp_invgen TYPE gty_invgen.
+
+  TYPES:
+         BEGIN OF lty_rg23d,
+           depexnum   TYPE j_1iexcnum,
+           status     TYPE j_1istatus,
+         END OF lty_rg23d,
+
+         BEGIN OF lty_lips,
+           vbeln      TYPE vbeln_vl,
+           posnr      TYPE posnr_vl,
+           lfimg      TYPE lfimg,
+         END OF lty_lips.
+
+  DATA:
+        lt_rg23d        TYPE STANDARD TABLE OF lty_rg23d,
+        lt_lips         TYPE STANDARD TABLE OF lty_lips,
+        lw_rg23d        TYPE lty_rg23d,
+        lw_lips         TYPE lty_lips,
+        lw_rg23d_c      TYPE gty_rg23d,
+        lw_opt          TYPE ctu_params,
+        lw_messtab      TYPE bdcmsgcoll,
+        lw_1iexcdtl     TYPE gty_1iexcdtl,
+        lw_xexcgrp      TYPE gty_xexcgrp,
+        lw_srgrp        TYPE j_1isergrp,
+        lw_exgrp        TYPE j_1iexcgrp,
+        lw_qty(17)      TYPE c,
+        w_docno         TYPE ystkdtls-docno,
+        w_docno_log         TYPE ystkdtls-docno,
+        w_lgort(6)      TYPE c,
+        w_lgort_log      TYPE char6,
+        lw_index        TYPE char2,
+        lw_cfield       TYPE char20,
+        lw_pfield       TYPE char20.
+
+
+  REFRESH: gt_bdcdata,gt_messtab.
+
+  lt_lips[] = lp_lips.
+
+  IF lp_invgen-delivery IS NOT INITIAL.
+    DELETE lt_lips WHERE vbeln NE lp_invgen-delivery.
+*    DELETE lt_lips WHERE lfimg IS INITIAL.
+  ENDIF.
+
+  READ TABLE gt_rg23d INTO lw_rg23d_c
+                      WITH KEY vbeln = lp_invgen-delivery
+                               exnum = lp_invgen-invoice_no
+                               BINARY SEARCH.
+  IF sy-subrc EQ 0.
+    lp_invgen-exnum  = lw_rg23d_c-depexnum.
+    lp_invgen-status = gc_s.
+*    PERFORM deque_area_and_report USING I_AREA i_report_no.
+    RETURN.
+  ENDIF.
+
+  READ TABLE gt_1iexcdtl INTO lw_1iexcdtl
+                         WITH KEY exnum     = lp_invgen-invoice_no.
+  IF sy-subrc EQ 0.
+
+    READ TABLE gt_xexcgrp INTO lw_xexcgrp
+                          WITH KEY zsaltyp = 'RTC'
+                                   exgrp   = lw_1iexcdtl-exgrp.
+    IF sy-subrc EQ 0.
+      lw_srgrp = lw_xexcgrp-srgrp.
+      lw_exgrp = lw_xexcgrp-exgrp.
+    ELSE.
+      LOOP AT gt_xexcgrp INTO lw_xexcgrp
+                         WHERE zsaltyp NE 'RTC'
+                           AND exgrp   EQ lw_1iexcdtl-exgrp.
+        lw_srgrp = lw_xexcgrp-srgrp.
+        lw_exgrp = lw_xexcgrp-exgrp.
+        EXIT.
+      ENDLOOP.
+    ENDIF.
+
+    " ( pwc_071 25.05.2017
+*    w_docno = lw_1iexcdtl-docno.
+*    " exported to FM J_1I7_USEREXIT_DEPOT_SELECTION.
+*    EXPORT  w_docno TO MEMORY ID 'DOC'.
+*    w_lgort = lw_1iexcdtl-lgort.
+*    " exported to FM J_1I7_USEREXIT_DEPOT_SELECTION.
+*    EXPORT  w_lgort TO MEMORY ID '#LGO'.
+
+    w_docno_log = lw_1iexcdtl-docno.
+    " exported to FM J_1I7_USEREXIT_DEPOT_SELECTION.
+    EXPORT  w_docno_log TO MEMORY ID 'DOC_LOG'.
+    w_lgort_log = lw_1iexcdtl-lgort.
+    " exported to FM J_1I7_USEREXIT_DEPOT_SELECTION.
+    EXPORT  w_lgort_log TO MEMORY ID '#LGO_LOG'.
+
+    " ) pwc_071 25.05.2017
+
+  ENDIF.
+
+  lw_qty = lp_invgen-lfimg.
+  CONDENSE lw_qty.
+
+  PERFORM bdc_dynpro      USING 'SAPMJ1IJ'   '0100'.
+  PERFORM bdc_field       USING 'BDC_OKCODE' '/EESEL'.
+
+  PERFORM bdc_dynpro      USING 'SAPMJ1IJ'   '0300'.
+  PERFORM bdc_field       USING 'BDC_CURSOR' 'J1IJ300-SRGRP'.
+  PERFORM bdc_field       USING 'BDC_OKCODE' '=ENTR'.
+  PERFORM bdc_field       USING 'LIPS-VBELN' lp_invgen-delivery.
+  PERFORM bdc_field       USING 'J1IJ300-EXGRP' lw_exgrp.
+  PERFORM bdc_field       USING 'J1IJ300-SRGRP' lw_srgrp.
+
+  LOOP AT lt_lips INTO lw_lips.
+
+    UNPACK sy-tabix TO lw_index.
+    CONCATENATE 'XLIPS-FLG(' lw_index ')' INTO lw_cfield.
+
+    IF sy-tabix GT 1.
+      CLEAR: lw_index.
+      lw_index = sy-tabix - 1.
+      UNPACK lw_index TO lw_index.
+      CONCATENATE 'XLIPS-FLG(' lw_index ')' INTO lw_pfield.
+    ENDIF.
+
+    lw_qty = lw_lips-lfimg.
+    CONDENSE lw_qty.
+
+    IF lw_pfield IS NOT INITIAL.
+      PERFORM bdc_dynpro      USING 'SAPMJ1IJ'   '0400'.
+      PERFORM bdc_field       USING 'BDC_CURSOR' 'XLIPS-POSNR(02)'.
+      PERFORM bdc_field       USING 'BDC_OKCODE' '=DETL'.
+      PERFORM bdc_field       USING lw_pfield ' '.
+    ENDIF.
+
+    PERFORM bdc_dynpro      USING 'SAPMJ1IJ'   '0400'.
+    PERFORM bdc_field       USING 'BDC_CURSOR' 'XLIPS-POSNR(02)'.
+    PERFORM bdc_field       USING 'BDC_OKCODE' '=DETL'.
+    PERFORM bdc_field       USING lw_cfield 'X'.
+
+    PERFORM bdc_dynpro      USING 'SAPMJ1IJ'   '0500'.
+    PERFORM bdc_field       USING 'BDC_CURSOR' 'LRG23D-MENGE(01)'.
+    PERFORM bdc_field       USING 'BDC_OKCODE' '=EXIN'.
+    PERFORM bdc_field       USING 'LRG23D-MENGE(01)' lw_qty.
+
+    PERFORM bdc_dynpro      USING 'SAPMJ1IK' '0300'.
+    PERFORM bdc_field       USING 'BDC_CURSOR' 'EXC_TAB-DOCYR(01)'.
+    PERFORM bdc_field       USING 'BDC_OKCODE' '=SELE'.
+
+    PERFORM bdc_dynpro      USING 'SAPMJ1IK' '0100'.
+    PERFORM bdc_field       USING 'BDC_OKCODE' '/EBACK'.
+    PERFORM bdc_field       USING 'BDC_CURSOR' 'NUM_INV'.
+    PERFORM bdc_field       USING 'RB1' 'X'.
+    PERFORM bdc_field       USING 'NUM_INV' '30'.
+    PERFORM bdc_field       USING 'SEL_PER' '60'.
+
+    PERFORM bdc_dynpro      USING 'SAPMJ1IK' '0200'.
+    PERFORM bdc_field       USING 'BDC_CURSOR' 'EXC_TAB-DOCYR(01)'.
+    PERFORM bdc_field       USING 'BDC_OKCODE' '=ENTE'.
+
+    PERFORM bdc_dynpro      USING 'SAPMJ1IJ'   '0500'.
+    PERFORM bdc_field       USING 'BDC_OKCODE' '/EBACK'.
+    PERFORM bdc_field       USING 'BDC_CURSOR' 'LRG23D-MENGE(01)'.
+
+    CLEAR: lw_index,lw_cfield,lw_pfield,lw_qty.
+
+  ENDLOOP.
+
+  PERFORM bdc_dynpro      USING 'SAPMJ1IJ'   '0400'.
+  PERFORM bdc_field       USING 'BDC_CURSOR' 'LIKP-VBELN'.
+  PERFORM bdc_field       USING 'BDC_OKCODE' '=SAVE'.
+
+  lw_opt-dismode  = gc_n.
+  lw_opt-racommit = gc_x.
+  lw_opt-updmode  = gc_s.
+
+  CALL TRANSACTION 'J1IJ' USING gt_bdcdata
+                          OPTIONS FROM lw_opt
+                          MESSAGES INTO gt_messtab.
+
+  " ( pwc_071 25.05.2017
+  FREE MEMORY ID 'DOC_LOG'.
+  FREE MEMORY ID '#LGO_LOG'.
+  " ) pwc_071 25.05.2017
+
+  READ TABLE gt_messtab INTO lw_messtab
+                        WITH KEY msgtyp = gc_e.
+  IF sy-subrc EQ 0.
+
+    lp_invgen-status  = gc_e.
+    lp_invgen-message = text-041.
+*    PERFORM deque_area_and_report USING i_area i_report_no.
+    RETURN.
+
+  ELSE.
+
+
+    SELECT depexnum
+           status
+           FROM j_1irg23d
+           INTO TABLE lt_rg23d
+           WHERE vbeln EQ lp_invgen-delivery.
+    IF sy-subrc = 0.
+      DELETE lt_rg23d WHERE status NE 'P'.
+    ENDIF.
+
+    IF lt_rg23d IS INITIAL.
+      lp_invgen-status  = gc_e.
+      lp_invgen-message = text-041.
+*      PERFORM deque_area_and_report USING i_area i_report_no.
+      RETURN.
+    ELSE.
+      lp_invgen-status  = gc_s.
+      READ TABLE lt_rg23d INTO lw_rg23d INDEX 1.
+      IF sy-subrc EQ 0.
+        lp_invgen-exnum = lw_rg23d-depexnum.
+      ENDIF.
+    ENDIF.
+
+
+  ENDIF.
+
+ENDFORM.                    "create_invoice
+*&---------------------------------------------------------------------*
+*&      Form  create_billdoc
+*&---------------------------------------------------------------------*
+*       text
+*----------------------------------------------------------------------*
+FORM create_billdoc CHANGING lp_invgen TYPE gty_invgen.
+
+  DATA:
+        lw_fkart        TYPE fkart,
+        lw_zparam       TYPE zparam.
+
+
+  READ TABLE gt_zparam INTO lw_zparam
+                       WITH KEY param2 = lp_invgen-bukrs
+                                param3 = lp_invgen-vkoiv
+                                value1 = gw_fdc
+                                value2 = lp_invgen-spart.
+  IF sy-subrc = 0.
+    lw_fkart = 'IV'.
+    PERFORM bdc_vf01_iv_zci USING lw_fkart
+                         CHANGING lp_invgen.
+    lw_fkart = 'ZCI'.
+    PERFORM bdc_vf01_iv_zci USING lw_fkart
+                         CHANGING lp_invgen.
+  ELSE.
+    PERFORM call_vf01 CHANGING lp_invgen.
+  ENDIF.
+
+
+ENDFORM.                    "create_billdoc
+*&---------------------------------------------------------------------*
+*&      Form  bdc_vf01_iv_zci
+*&---------------------------------------------------------------------*
+*       text
+*----------------------------------------------------------------------*
+FORM bdc_vf01_iv_zci USING lp_fkart
+                  CHANGING lp_invgen TYPE gty_invgen.
+
+  DATA:
+        lw_vbrk             TYPE gty_vbrk,
+        lw_opt              TYPE ctu_params,
+        lw_sn               TYPE char3,
+        lw_txt              TYPE char20,
+        lw_messtab          TYPE bdcmsgcoll,
+        lw_vbeln            TYPE vbeln_vf.
+
+  REFRESH: gt_bdcdata,gt_messtab.
+
+  READ TABLE gt_vbrk INTO lw_vbrk
+                     WITH KEY fkart = lp_fkart.
+  IF sy-subrc = 0.
+
+    CLEAR sy-msgv1.
+    MOVE lw_vbrk-vbeln TO sy-msgv1.
+
+  ELSE.
+
+    PERFORM bdc_dynpro      USING 'SAPMV60A' '0102'.
+    IF NOT lp_fkart IS INITIAL.
+      PERFORM bdc_field       USING 'RV60A-FKART' lp_fkart.
+    ENDIF.
+
+    CLEAR lw_sn.
+    lw_sn = lw_sn + 1.
+    CONDENSE lw_sn.
+    CONCATENATE 'KOMFK-VBELN(' lw_sn ')' INTO lw_txt.
+    CONDENSE lw_txt.
+    PERFORM bdc_field       USING lw_txt lp_invgen-delivery.
+    PERFORM bdc_field       USING 'BDC_OKCODE' 'FAKT'.
+
+    PERFORM bdc_dynpro      USING 'SAPMV60A' '0104'.
+    PERFORM bdc_field       USING 'BDC_OKCODE' 'SICH'.
+
+    CALL TRANSACTION 'VF01' USING gt_bdcdata
+                     OPTIONS FROM lw_opt
+                    MESSAGES INTO gt_messtab.
+
+  ENDIF.
+
+  READ TABLE gt_messtab INTO lw_messtab
+                        WITH KEY msgtyp = gc_e.
+  IF sy-subrc = 0.
+
+    lp_invgen-status  = gc_e.
+    lp_invgen-message = text-038.
+
+  ELSE.
+
+    IF lp_fkart        EQ gc_iv OR
+       lp_invgen-spart EQ gc_ty.
+
+      lw_vbeln = sy-msgv1.
+      UNPACK lw_vbeln TO lw_vbeln.
+      lp_invgen-billno = lw_vbeln.
+      lp_invgen-status = gc_s.
+
+    ELSE.
+
+      lw_vbeln = sy-msgv1.
+      UNPACK lw_vbeln TO lw_vbeln.
+      lp_invgen-blno   = lw_vbeln.
+      lp_invgen-status = gc_s.
+
+    ENDIF.
+
+  ENDIF.
+
+ENDFORM.                    "bdc_vf01_iv_zci
+*&---------------------------------------------------------------------*
+*&      Form  call_vf01
+*&---------------------------------------------------------------------*
+*       text
+*----------------------------------------------------------------------*
+FORM call_vf01 CHANGING lp_invgen TYPE gty_invgen.
+
+  DATA:
+        lt_billingdatain    TYPE STANDARD TABLE OF bapivbrk,
+        lt_return           TYPE STANDARD TABLE OF bapiret1,
+        lt_success          TYPE STANDARD TABLE OF bapivbrksuccess,
+        lw_billingdatain    TYPE bapivbrk,
+        lw_return           TYPE bapiret1,
+        lw_success          TYPE bapivbrksuccess,
+        lw_vbrk             TYPE gty_vbrk.
+
+**  " ( by pwc_159 on 13.06.2018
+  DATA :
+       lw_vbeln      TYPE vbeln,
+       lw_matdoc     TYPE mblnr,
+       lw_matdoc_yr  TYPE mjahr,
+       lt_return_t TYPE TABLE OF bapiret2.
+
+  DATA : lw_dtime TYPE sy-uzeit,
+         lw_symdate TYPE string,
+         lw_sydate TYPE string.
+
+  DATA : lw_objectkey      TYPE balnrext,
+         lt_return_log TYPE bapiret2_t,
+         lw_return_log TYPE bapiret2.
+
+  CONSTANTS: lc_subobject TYPE balsubobj  VALUE 'ZSCE_PTC',
+             lc_object    TYPE balobj_d   VALUE 'ZSCE_EWMLOG'.
+
+  CONCATENATE sy-datum sy-uzeit INTO lw_sydate.
+
+  CONCATENATE lp_invgen-wadat_ist '060000' INTO lw_symdate.
+
+**  "  by pwc_159 on 13.06.2018).
+
+*  READ TABLE gt_vbrk INTO lw_vbrk
+*                     WITH KEY .
+*  IF sy-subrc = 0.
+*    lp_invgen-billno = lw_vbrk-vbeln.
+*  ENDIF.
+** ( by pwc_159 on 13.06.2018 - Functional: Bhaumic
+
+  " For RPU Posting.
+  IF lp_invgen-delivery IS NOT INITIAL.
+    IF lp_invgen-rpu_applicable EQ abap_true. "Added by sonu kumar on 05.12.2018
+
+      CLEAR : lw_vbeln, lw_matdoc, lw_matdoc_yr, lt_return_t.
+
+      lw_vbeln = lp_invgen-delivery.
+
+      CALL FUNCTION 'Z_PTC_PALLET_CODE'
+        EXPORTING
+          i_vbeln       = lw_vbeln
+        IMPORTING
+          e_matdoc      = lw_matdoc
+          e_matdoc_year = lw_matdoc_yr
+        TABLES
+          t_return      = lt_return_t.
+
+      lw_objectkey = 'FM Z_PTC_PALLET_CODE'.
+
+      READ TABLE lt_return_t TRANSPORTING NO FIELDS WITH KEY type = 'E'.
+      IF sy-subrc EQ 0.
+        CLEAR :lp_invgen-billno,
+               lp_invgen-status.
+
+        lw_return_log-id     = '00'.
+        lw_return_log-number = '001'.
+        lw_return_log-type   = 'E'.
+        lw_return_log-message = 'Error While Processed'.
+        CONCATENATE 'Billing Document' lw_vbeln 'Material Document' lw_matdoc 'Material Document Year' lw_matdoc_yr INTO lw_return-message_v1.
+        APPEND lw_return_log TO lt_return_log.
+        CLEAR lw_return_log.
+
+      ELSE.
+        lw_return_log-id     = '00'.
+        lw_return_log-number = '001'.
+        lw_return_log-type   = 'S'.
+        lw_return_log-message = 'Processed Successfully'.
+        CONCATENATE 'Billing Document' lw_vbeln 'Material Document' lw_matdoc 'Material Document Year' lw_matdoc_yr INTO lw_return-message_v1.
+        APPEND lw_return_log TO lt_return_log.
+        CLEAR lw_return_log.
+
+      ENDIF.
+      CALL FUNCTION 'Z_APPLICATION_LOG_CREATE'
+        EXPORTING
+          i_objectkey = lw_objectkey
+          i_object    = lc_object
+          i_subobject = lc_subobject
+          it_return   = lt_return_log.
+
+    ELSE.
+
+      IF lp_invgen-billno IS INITIAL. "Added by Arpit H. Patel on 09.2.2022
+        lw_billingdatain-ordbilltyp = lp_invgen-fkarv.
+        lw_billingdatain-ref_doc    = lp_invgen-delivery.
+        lw_billingdatain-ref_doc_ca = gc_j.
+        APPEND lw_billingdatain TO lt_billingdatain.
+
+        IF lw_sydate >= lw_symdate.
+
+          CALL FUNCTION 'BAPI_BILLINGDOC_CREATEMULTIPLE'
+            TABLES
+              billingdatain = lt_billingdatain
+              return        = lt_return
+              success       = lt_success.
+
+
+          READ TABLE lt_return INTO lw_return
+                            WITH KEY type = gc_e.
+          IF sy-subrc EQ 0.
+
+            CALL FUNCTION 'BAPI_TRANSACTION_ROLLBACK'.
+            lp_invgen-status  = gc_e.
+            lp_invgen-message = lw_return-message.
+
+          ELSE.
+
+            CALL FUNCTION 'BAPI_TRANSACTION_COMMIT'
+              EXPORTING
+                wait = 'X'.
+
+            READ TABLE lt_success INTO lw_success INDEX 1.
+            IF sy-subrc EQ 0.
+              lp_invgen-billno = lw_success-bill_doc.
+              lp_invgen-status = gc_s.
+*          lp_invgen-rpu_applicable = abap_true.
+            ENDIF.
+
+            " for J_1IRG23D Updation - damaged material cases
+            IF lp_invgen-lgort EQ gc_d0dm.
+              CALL FUNCTION 'Z_UPDATE_RG23D_FOR_DAMAGED_MAT'
+                EXPORTING
+                  vbeln = lp_invgen-billno
+                  vbelv = lp_invgen-delivery.
+            ENDIF.
+
+
+          ENDIF.
+
+        ELSE.
+*
+          lp_invgen-status  = gc_e.
+*    lp_invgen-message = 'Previous Posting Date not allowed !!!'.
+
+        ENDIF.
+
+      ENDIF.
+
+    ENDIF.
+  ENDIF.
+**  by pwc_159 on 13.06.2018 ).
+
+  IF lw_matdoc IS NOT INITIAL AND lw_matdoc_yr IS NOT INITIAL." AND lp_invgen-delivery IS NOT INITIAL.. " added by arpit 09/02/2022
+    IF lp_invgen-billno IS INITIAL. "Added by sonu kumar on 05.12.2018
+
+      lw_billingdatain-ordbilltyp = lp_invgen-fkarv.
+      lw_billingdatain-ref_doc    = lp_invgen-delivery.
+      lw_billingdatain-ref_doc_ca = gc_j.
+      APPEND lw_billingdatain TO lt_billingdatain.
+
+      IF lw_sydate >= lw_symdate.
+
+        CALL FUNCTION 'BAPI_BILLINGDOC_CREATEMULTIPLE'
+          TABLES
+            billingdatain = lt_billingdatain
+            return        = lt_return
+            success       = lt_success.
+
+
+        READ TABLE lt_return INTO lw_return
+                          WITH KEY type = gc_e.
+        IF sy-subrc EQ 0.
+
+          CALL FUNCTION 'BAPI_TRANSACTION_ROLLBACK'.
+          lp_invgen-status  = gc_e.
+          lp_invgen-message = lw_return-message.
+
+        ELSE.
+
+          CALL FUNCTION 'BAPI_TRANSACTION_COMMIT'
+            EXPORTING
+              wait = 'X'.
+
+          READ TABLE lt_success INTO lw_success INDEX 1.
+          IF sy-subrc EQ 0.
+            lp_invgen-billno = lw_success-bill_doc.
+            lp_invgen-status = gc_s.
+*          lp_invgen-rpu_applicable = abap_true.
+          ENDIF.
+
+          " for J_1IRG23D Updation - damaged material cases
+          IF lp_invgen-lgort EQ gc_d0dm.
+            CALL FUNCTION 'Z_UPDATE_RG23D_FOR_DAMAGED_MAT'
+              EXPORTING
+                vbeln = lp_invgen-billno
+                vbelv = lp_invgen-delivery.
+          ENDIF.
+
+
+        ENDIF.
+
+      ELSE.
+*
+        lp_invgen-status  = gc_e.
+*    lp_invgen-message = 'Previous Posting Date not allowed !!!'.
+
+      ENDIF.
+
+    ENDIF.
+  ENDIF.
+
+*** ( by pwc_159 on 13.06.2018 - Functional: Bhaumic
+*
+*  " For RPU Posting.
+*  IF lp_invgen-delivery IS NOT INITIAL.
+*    IF lp_invgen-rpu_applicable EQ abap_true. "Added by sonu kumar on 05.12.2018
+*
+*      CLEAR : lw_vbeln, lw_matdoc, lw_matdoc_yr, lt_return_t.
+*
+*      lw_vbeln = lp_invgen-delivery.
+*
+*      CALL FUNCTION 'Z_PTC_PALLET_CODE'
+*        EXPORTING
+*          i_vbeln       = lw_vbeln
+*        IMPORTING
+*          e_matdoc      = lw_matdoc
+*          e_matdoc_year = lw_matdoc_yr
+*        TABLES
+*          t_return      = lt_return_t.
+*
+*      lw_objectkey = 'FM Z_PTC_PALLET_CODE'.
+*
+*      READ TABLE lt_return_t TRANSPORTING NO FIELDS WITH KEY type = 'E'.
+*      IF sy-subrc EQ 0.
+*        CLEAR :lp_invgen-billno,
+*               lp_invgen-status.
+*
+*        lw_return_log-id     = '00'.
+*        lw_return_log-number = '001'.
+*        lw_return_log-type   = 'E'.
+*        lw_return_log-message = 'Error While Processed'.
+*        CONCATENATE 'Billing Document' lw_vbeln 'Material Document' lw_matdoc 'Material Document Year' lw_matdoc_yr INTO lw_return-message_v1.
+*        APPEND lw_return_log TO lt_return_log.
+*        CLEAR lw_return_log.
+*
+*      ELSE.
+*        lw_return_log-id     = '00'.
+*        lw_return_log-number = '001'.
+*        lw_return_log-type   = 'S'.
+*        lw_return_log-message = 'Processed Successfully'.
+*        CONCATENATE 'Billing Document' lw_vbeln 'Material Document' lw_matdoc 'Material Document Year' lw_matdoc_yr INTO lw_return-message_v1.
+*        APPEND lw_return_log TO lt_return_log.
+*        CLEAR lw_return_log.
+*
+*      ENDIF.
+*      CALL FUNCTION 'Z_APPLICATION_LOG_CREATE'
+*        EXPORTING
+*          i_objectkey = lw_objectkey
+*          i_object    = lc_object
+*          i_subobject = lc_subobject
+*          it_return   = lt_return_log.
+*    ENDIF.
+*  ENDIF.
+***  by pwc_159 on 13.06.2018 ).
+
+ENDFORM.                    "call_vf01
+*&---------------------------------------------------------------------*
+*&      Form  generate_lrno
+*&---------------------------------------------------------------------*
+*       text
+*----------------------------------------------------------------------*
+FORM generate_lrno CHANGING lp_invgen TYPE gty_invgen.
+
+  DATA:
+        lw_lrno         TYPE char12,
+        lw_yrpar        TYPE yrpar,
+        lw_rc           TYPE nrreturn.
+
+  READ TABLE gt_zparam_lr TRANSPORTING NO FIELDS
+                          WITH KEY param1 = 'FCPL_LR_NO'
+                                   param2 = 'INCO1'
+                                   param3 = lp_invgen-inco1.
+  IF sy-subrc EQ 0.
+
+    lw_yrpar-nrrangenr = '01'.
+    lw_yrpar-object    = 'YGTACNNO'.
+
+    CALL FUNCTION 'NUMBER_GET_NEXT'
+      EXPORTING
+        nr_range_nr             = lw_yrpar-nrrangenr
+        object                  = lw_yrpar-object
+        subobject               = 'ZD'
+      IMPORTING
+        number                  = lw_lrno
+        returncode              = lw_rc
+      EXCEPTIONS
+        interval_not_found      = 1
+        number_range_not_intern = 2
+        object_not_found        = 3
+        quantity_is_0           = 4
+        quantity_is_not_1       = 5
+        interval_overflow       = 6
+        buffer_overflow         = 7
+        OTHERS                  = 8.
+    IF sy-subrc EQ 0 AND lw_rc EQ space.
+*      SHIFT lw_lrno LEFT DELETING LEADING '0'.
+      CONCATENATE 'ZD' lw_lrno INTO lp_invgen-lr_no.
+      lp_invgen-lr_dt = sy-datum.
+    ENDIF.
+
+  ENDIF.
+
+ENDFORM.                    "generate_lrno

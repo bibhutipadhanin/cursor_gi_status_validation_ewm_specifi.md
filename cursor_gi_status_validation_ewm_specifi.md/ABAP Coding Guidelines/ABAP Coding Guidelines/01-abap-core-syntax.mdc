@@ -1,0 +1,194 @@
+---
+description: Core ABAP syntax, formatting, and naming conventions for ECC 6.0 EHP 6 ABAP 731 SP0008
+alwaysApply: true
+globs: []
+---
+
+# ABAP Core Syntax and Naming Conventions
+
+## Target Environment
+- **SAP ECC 6.0 EHP 6**
+- **ABAP 731 SP0008**
+
+## Code Formatting Standards
+
+### General Rules
+- Use **UPPERCASE** for all ABAP keywords (REPORT, CLASS, METHOD, DATA, IF, ENDIF, etc.)
+- Use **camelCase** for variable names (preferred for modern ABAP 731 SP0008)
+- Use meaningful, descriptive names that clearly indicate purpose
+- Indent with **2 spaces** (standard ABAP convention)
+- Maximum line length: **72 characters** (SAP standard for readability)
+- Always declare variables at the beginning of the program/method/class
+- Use `TYPE` instead of `LIKE` when possible (more explicit and maintainable)
+- Use `CONSTANTS` for magic numbers and string literals
+- Group related declarations together with blank lines for readability
+
+### Line Length Guidelines
+- Maximum line length: **72 characters** (SAP standard)
+- Always prioritize code clarity over strict line length
+
+## Naming Conventions (Enterprise Standard)
+
+### Object Naming
+- **Classes**: `ZCL_` or `YCL_` prefix (e.g., `ZCL_CUSTOMER_MANAGER`)
+- **Interfaces**: `ZIF_` or `YIF_` prefix (e.g., `ZIF_DATA_ACCESS`)
+- **Exception Classes**: `ZCX_` or `YCX_` prefix (e.g., `ZCX_CUSTOMER_NOT_FOUND`)
+- **Function Modules**: `Z_` or `Y_` prefix (e.g., `Z_GET_CUSTOMER_DATA`)
+- **Function Groups**: `ZFG_` or `YFG_` prefix (e.g., `ZFG_CUSTOMER_UTILS`)
+- **Reports**: `ZR_` or `YR_` prefix (e.g., `ZR_CUSTOMER_REPORT`)
+- **Programs**: `ZP_` or `YP_` prefix (e.g., `ZP_CUSTOMER_MAINTENANCE`)
+- **Includes**: `ZIN_` or `YIN_` prefix (e.g., `ZIN_CUSTOMER_DEFINITIONS`)
+
+### Variable Naming Prefixes
+- **Local variables**: `lv_` prefix (e.g., `lv_customer_id`, `lv_total_amount`)
+- **Global variables**: `gv_` prefix (e.g., `gv_system_date`, `gv_user_id`)
+- **Constants**: `gc_` prefix (e.g., `gc_max_records`, `gc_status_active`)
+- **Internal tables**: `lt_` prefix (e.g., `lt_customers`, `lt_orders`)
+- **Work areas/structures**: `ls_` prefix (e.g., `ls_customer`, `ls_order_header`)
+- **Field symbols**: `<fs_>` prefix (e.g., `<fs_customer>`, `<fs_order>`)
+- **Parameters**: `p_` prefix (e.g., `p_customer_id`, `p_date_from`)
+- **Select-options**: `s_` prefix (e.g., `s_customer_id`, `s_date_range`)
+- **Returning parameters**: `rv_` prefix (e.g., `rv_success`, `rv_count`)
+- **Importing parameters**: `iv_` prefix (e.g., `iv_customer_id`, `iv_date`)
+- **Exporting parameters**: `ev_` prefix (e.g., `ev_customer_data`, `ev_count`)
+- **Changing parameters**: `cv_` prefix (e.g., `cv_status`, `cv_amount`)
+- **Exception variables**: `lx_` prefix (e.g., `lx_customer_error`, `lx_system_error`)
+- **Object references**: `lo_` prefix (e.g., `lo_customer_manager`, `lo_data_access`)
+- **Class data**: `mv_` prefix for instance attributes, `mc_` for class constants
+
+### Type Definitions
+- **Local types**: `TYPES: ty_` prefix (e.g., `ty_customer_tab`, `ty_customer_key`)
+- **Global types**: `ZTY_` or `YTY_` prefix in type pools or global types
+
+## Data Type Declarations
+
+### Type Usage
+- **Prefer `TYPE` over `LIKE`** for explicit type references
+- Use `LIKE` only when copying structure from another object (e.g., `LIKE LINE OF`)
+- Use `TYPES` for local type definitions within programs/classes
+- Use `CONSTANTS` for all constant values (never hardcode literals in business logic)
+
+### Internal Table Declarations
+- **Always specify table type**: `STANDARD TABLE`, `SORTED TABLE`, or `HASHED TABLE`
+- Use `WITH UNIQUE KEY` or `WITH NON-UNIQUE KEY` for sorted/hashed tables
+- Specify key fields explicitly for performance and clarity
+- Use `WITH HEADER LINE` only when absolutely necessary (legacy code compatibility)
+
+### Example Declarations
+```abap
+" Constants
+CONSTANTS: gc_max_records TYPE i VALUE 10000,
+           gc_status_active TYPE char1 VALUE 'A',
+           gc_delimiter TYPE char1 VALUE '|'.
+
+" Local types
+TYPES: BEGIN OF ty_customer_key,
+         kunnr TYPE kunnr,
+         bukrs TYPE bukrs,
+       END OF ty_customer_key,
+       ty_customer_key_tab TYPE STANDARD TABLE OF ty_customer_key
+                           WITH NON-UNIQUE KEY kunnr bukrs.
+
+" Variables
+DATA: lv_customer_id TYPE kunnr,
+      lv_total_amount TYPE bapi_curr_amount,
+      lv_success_flag TYPE abap_bool.
+
+" Internal tables
+DATA: lt_customers TYPE STANDARD TABLE OF kna1,
+      lt_customer_keys TYPE SORTED TABLE OF ty_customer_key
+                       WITH UNIQUE KEY kunnr bukrs,
+      ls_customer TYPE kna1.
+
+" Field symbols
+FIELD-SYMBOLS: <fs_customer> TYPE kna1,
+               <fs_amount> TYPE bapi_curr_amount.
+
+" Object references
+DATA: lo_customer_manager TYPE REF TO zcl_customer_manager,
+      lo_exception TYPE REF TO zcx_customer_error.
+```
+
+## ABAP 731 SP0008 Syntax Guidelines
+
+### Standard Syntax Features
+- **Explicit variable declarations**: Always declare variables explicitly using `DATA`
+- **String concatenation**: Use `CONCATENATE` for string operations
+- **Table access**: Use `READ TABLE` for accessing table entries
+- **Object creation**: Use `CREATE OBJECT` for object instantiation
+- **Traditional control structures**: Use standard IF/ELSE, CASE, DO, WHILE
+
+### Usage Guidelines
+- Always declare variables at the beginning of the method/program
+- Use explicit declarations for clarity and maintainability
+- Prefer traditional ABAP syntax for compatibility
+- Use CONCATENATE for string operations
+- Use READ TABLE for table lookups
+
+### Examples
+```abap
+" Explicit variable declaration
+DATA: lv_customer_id TYPE kunnr,
+      lt_customers TYPE STANDARD TABLE OF kna1,
+      ls_customer TYPE kna1.
+
+lv_customer_id = '12345'.
+
+" Object creation
+DATA: lo_manager TYPE REF TO zcl_customer_manager.
+CREATE OBJECT lo_manager
+  EXPORTING
+    iv_customer_id = lv_customer_id.
+
+" String concatenation
+DATA: lv_message TYPE string.
+CONCATENATE 'Customer' ls_customer-kunnr 'found with name' ls_customer-name1
+  INTO lv_message SEPARATED BY space.
+
+" Table access
+READ TABLE lt_customers INTO ls_customer
+  WITH KEY kunnr = lv_customer_id.
+IF sy-subrc = 0.
+  " Process customer
+ENDIF.
+```
+
+## Database Access Rules
+
+### Native SQL Prohibition
+- **NEVER use Native SQL** - Always use Open SQL (ABAP SQL) only
+- Native SQL statements (`EXEC SQL ... ENDEXEC`) are strictly forbidden
+- Native SQL creates database portability and security issues
+- All database access must use standard ABAP Open SQL statements
+
+### Examples
+```abap
+" ❌ FORBIDDEN: Native SQL
+EXEC SQL.
+  SELECT * FROM kna1 WHERE kunnr = :lv_customer_id
+ENDEXEC.
+
+" ✅ CORRECT: Open SQL
+DATA: ls_customer TYPE kna1.
+
+SELECT SINGLE kunnr name1
+  FROM kna1
+  INTO ls_customer
+  WHERE kunnr = lv_customer_id.
+```
+
+## Code Organization
+
+### Structure
+- Group related declarations together
+- Separate constants, types, data declarations, and class definitions
+- Use blank lines to separate logical sections
+- Keep related functionality together
+- Follow single responsibility principle
+
+### Comments
+- Use meaningful variable names to reduce need for comments
+- Comment complex business logic and algorithms
+- Document all public methods and interfaces
+- Keep comments up-to-date with code changes
+- Use `*` for full-line comments, `"` for inline comments

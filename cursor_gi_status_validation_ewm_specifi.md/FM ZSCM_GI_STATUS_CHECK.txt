@@ -1,0 +1,206 @@
+FUNCTION zscm_gi_status_check.
+*"----------------------------------------------------------------------
+*"*"Local Interface:
+*"  IMPORTING
+*"     VALUE(IT_DELIVERY) TYPE  ZSCM_DELIVERY_TT
+*"  EXPORTING
+*"     VALUE(ET_GI_STATUS) TYPE  ZSCM_GI_STATUS_TT
+*"     VALUE(ET_RETURN) TYPE  BAPIRET2_T
+*"----------------------------------------------------------------------
+*" Description: Check GI status for deliveries in EWM
+*" Author: Development Team
+*" Date: 19-Dec-2025
+*" Transport: <Transport Number>
+*"----------------------------------------------------------------------
+*" Change History:
+*" Date       | Author      | Description
+*" 19-Dec-2025| Dev Team    | Initial creation - CD:8085981
+*"----------------------------------------------------------------------
+
+  " Local type definitions
+  TYPES: BEGIN OF lty_refdoc,
+           refdocno  TYPE /scdl/dl_refdocno,
+           docid     TYPE /scdl/dl_docid,
+           itemid    TYPE /scdl/dl_itemid,
+         END OF lty_refdoc,
+
+         BEGIN OF lty_proci,
+           docid      TYPE /scdl/dl_docid,
+           itemid     TYPE /scdl/dl_itemid,
+           docno      TYPE /scdl/dl_docno_int,
+           status_gi  TYPE /scdl/dl_status_value,
+         END OF lty_proci,
+
+         BEGIN OF lty_delivery_unique,
+           vbeln TYPE /scdl/dl_refdocno,
+         END OF lty_delivery_unique.
+
+  " Local data declarations
+  DATA: lt_refdoc           TYPE STANDARD TABLE OF lty_refdoc,
+        lt_proci            TYPE STANDARD TABLE OF lty_proci,
+        lt_delivery_unique  TYPE SORTED TABLE OF lty_delivery_unique
+                            WITH UNIQUE KEY vbeln,
+        ls_refdoc           TYPE lty_refdoc,
+        ls_proci            TYPE lty_proci,
+        ls_gi_status        TYPE zscm_gi_status_st,
+        ls_delivery         TYPE zscm_delivery_st,
+        ls_delivery_unique  TYPE lty_delivery_unique,
+        ls_return           TYPE bapiret2,
+        lv_status_desc      TYPE char50,
+        lv_delivery_count   TYPE i,
+        lv_pending_count    TYPE i.
+
+  " Constants
+  CONSTANTS: gc_refdoccat_erp  TYPE /scdl/dl_refdoccat VALUE 'ERP',
+             gc_status_complete TYPE /scdl/dl_status_value VALUE '9',
+             gc_status_initial  TYPE /scdl/dl_status_value VALUE ' ',
+             gc_status_zero     TYPE /scdl/dl_status_value VALUE '0',
+             gc_msgid           TYPE symsgid VALUE 'ZSCM_GI_MSG',
+             gc_max_deliveries  TYPE i VALUE 1000.
+
+  " Initialize export parameters
+  CLEAR: et_gi_status, et_return.
+
+  " Step 1: Input validation
+  IF it_delivery IS INITIAL.
+    ls_return-type       = 'E'.
+    ls_return-id         = gc_msgid.
+    ls_return-number     = '001'.
+    ls_return-message    = 'No deliveries provided for GI status check'.
+    APPEND ls_return TO et_return.
+    RETURN.
+  ENDIF.
+
+  " Check maximum delivery count
+  DESCRIBE TABLE it_delivery LINES lv_delivery_count.
+  IF lv_delivery_count > gc_max_deliveries.
+    ls_return-type       = 'E'.
+    ls_return-id         = gc_msgid.
+    ls_return-number     = '002'.
+    ls_return-message    = 'Maximum 1000 deliveries allowed per call'.
+    APPEND ls_return TO et_return.
+    RETURN.
+  ENDIF.
+
+  " Step 2: Remove duplicates from input
+  LOOP AT it_delivery INTO ls_delivery.
+    IF ls_delivery-vbeln IS NOT INITIAL.
+      ls_delivery_unique-vbeln = ls_delivery-vbeln.
+      INSERT ls_delivery_unique INTO TABLE lt_delivery_unique.
+    ENDIF.
+  ENDLOOP.
+
+  IF lt_delivery_unique IS INITIAL.
+    ls_return-type       = 'W'.
+    ls_return-id         = gc_msgid.
+    ls_return-number     = '003'.
+    ls_return-message    = 'No valid deliveries provided'.
+    APPEND ls_return TO et_return.
+    RETURN.
+  ENDIF.
+
+  " Step 3: Get DOCID and ITEMID from /SCDL/DB_REFDOC
+  SELECT refdocno docid itemid
+    FROM /scdl/db_refdoc
+    INTO TABLE lt_refdoc
+    FOR ALL ENTRIES IN lt_delivery_unique
+    WHERE refdoccat = gc_refdoccat_erp
+      AND refdocno = lt_delivery_unique-vbeln.
+
+  IF sy-subrc <> 0.
+    ls_return-type       = 'W'.
+    ls_return-id         = gc_msgid.
+    ls_return-number     = '004'.
+    ls_return-message    = 'No reference documents found in EWM'.
+    APPEND ls_return TO et_return.
+    RETURN.
+  ENDIF.
+
+  " Step 4: Get STATUS_GI from /SCDL/DB_PROCI_O
+  IF lt_refdoc IS NOT INITIAL.
+    SELECT docid itemid docno status_gi
+      FROM /scdl/db_proci_o
+      INTO TABLE lt_proci
+      FOR ALL ENTRIES IN lt_refdoc
+      WHERE docid = lt_refdoc-docid
+        AND itemid = lt_refdoc-itemid.
+
+    IF sy-subrc <> 0.
+      ls_return-type       = 'W'.
+      ls_return-id         = gc_msgid.
+      ls_return-number     = '005'.
+      ls_return-message    = 'No process items found in EWM'.
+      APPEND ls_return TO et_return.
+      RETURN.
+    ELSE.
+      " Sort table to enable binary search
+      SORT lt_proci BY docid itemid.
+    ENDIF.
+  ENDIF.
+
+  " Step 5: Filter and prepare output
+  " Only include deliveries where GI is NOT completed
+  LOOP AT lt_refdoc INTO ls_refdoc.
+
+    " Find corresponding process item
+    READ TABLE lt_proci INTO ls_proci
+      WITH KEY docid = ls_refdoc-docid
+               itemid = ls_refdoc-itemid
+      BINARY SEARCH.
+
+    IF sy-subrc = 0.
+      " Check if GI is NOT completed
+      IF ls_proci-status_gi <> gc_status_complete AND
+         ls_proci-status_gi <> gc_status_initial AND
+         ls_proci-status_gi <> gc_status_zero.
+
+        " Prepare output record
+        CLEAR: ls_gi_status, lv_status_desc.
+        ls_gi_status-vbeln = ls_refdoc-refdocno.
+        ls_gi_status-raw_status = ls_proci-status_gi.
+
+        " Map status to description
+        CASE ls_proci-status_gi.
+          WHEN '1' OR '2'.
+            lv_status_desc = 'Not Started'.
+          WHEN '3'.
+            lv_status_desc = 'In Process'.
+          WHEN '4' OR '5' OR '6' OR '7' OR '8'.
+            lv_status_desc = 'In Process'.
+          WHEN OTHERS.
+            lv_status_desc = 'Unknown Status'.
+        ENDCASE.
+
+        ls_gi_status-status_gi_desc = lv_status_desc.
+
+        " Add to output table (avoid duplicates)
+        " Note: Using linear search here as table is being built dynamically
+        READ TABLE et_gi_status TRANSPORTING NO FIELDS
+          WITH KEY vbeln = ls_gi_status-vbeln.
+
+        IF sy-subrc <> 0.
+          APPEND ls_gi_status TO et_gi_status.
+        ENDIF.
+
+      ENDIF.
+    ENDIF.
+
+  ENDLOOP.
+
+  " Step 6: Prepare return messages
+  DESCRIBE TABLE et_gi_status LINES lv_pending_count.
+
+  IF lv_pending_count > 0.
+    " Some deliveries have incomplete GI
+    ls_return-type       = 'E'.
+    ls_return-id         = gc_msgid.
+    ls_return-number     = '007'.
+    CONCATENATE 'GI incomplete for'
+                lv_pending_count
+                'deliveries'
+      INTO ls_return-message SEPARATED BY space.
+    APPEND ls_return TO et_return.
+  ENDIF.
+
+ENDFUNCTION.
+

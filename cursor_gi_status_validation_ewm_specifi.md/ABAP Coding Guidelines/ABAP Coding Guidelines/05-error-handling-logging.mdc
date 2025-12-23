@@ -1,0 +1,565 @@
+---
+description: Error handling, exception management, and logging standards for ECC 6.0 EHP 6 ABAP 731 SP0008
+alwaysApply: true
+globs: []
+---
+
+# Error Handling and Logging
+
+## Target Environment
+- **SAP ECC 6.0 EHP 6**
+- **ABAP 731 SP0008**
+- Production-ready error handling
+
+## Exception Handling Strategy
+
+### Exception Class Hierarchy
+
+#### Standard Exception Classes
+- **CX_STATIC_CHECK**: Compile-time checked exceptions (preferred)
+- **CX_DYNAMIC_CHECK**: Runtime checked exceptions
+- **CX_NO_CHECK**: Unchecked exceptions (use sparingly)
+
+#### Custom Exception Classes
+- Inherit from appropriate base class
+- Use `ZCX_` or `YCX_` prefix
+- Define text IDs for messages
+- Include relevant attributes
+
+### Exception Class Structure
+
+```abap
+CLASS zcx_customer_error DEFINITION
+  INHERITING FROM cx_static_check
+  PUBLIC
+  FINAL
+  CREATE PUBLIC.
+
+  PUBLIC SECTION.
+    INTERFACES: if_t100_message.
+
+    " Text IDs
+    CONSTANTS: BEGIN OF customer_not_found,
+                 msgid TYPE symsgid VALUE 'Z_CUSTOMER_MSG',
+                 msgno TYPE symsgno VALUE '001',
+                 attr1 TYPE scx_attrname VALUE 'MV_CUSTOMER_ID',
+                 attr2 TYPE scx_attrname VALUE '',
+                 attr3 TYPE scx_attrname VALUE '',
+                 attr4 TYPE scx_attrname VALUE '',
+               END OF customer_not_found,
+               
+               BEGIN OF authorization_failed,
+                 msgid TYPE symsgid VALUE 'Z_CUSTOMER_MSG',
+                 msgno TYPE symsgno VALUE '002',
+                 attr1 TYPE scx_attrname VALUE 'MV_COMPANY_CODE',
+                 attr2 TYPE scx_attrname VALUE '',
+                 attr3 TYPE scx_attrname VALUE '',
+                 attr4 TYPE scx_attrname VALUE '',
+               END OF authorization_failed.
+
+    " Attributes
+    DATA: mv_customer_id TYPE kunnr READ-ONLY,
+          mv_company_code TYPE bukrs READ-ONLY,
+          mv_message TYPE string READ-ONLY.
+
+    " Constructor
+    METHODS: constructor
+               IMPORTING textid LIKE if_t100_message=>t100key OPTIONAL
+                         previous LIKE previous OPTIONAL
+                         mv_customer_id TYPE kunnr OPTIONAL
+                         mv_company_code TYPE bukrs OPTIONAL
+                         mv_message TYPE string OPTIONAL.
+
+ENDCLASS.
+
+CLASS zcx_customer_error IMPLEMENTATION.
+
+  METHOD constructor.
+    super->constructor( previous = previous ).
+    
+    me->mv_customer_id = mv_customer_id.
+    me->mv_company_code = mv_company_code.
+    me->mv_message = mv_message.
+    
+    CLEAR me->textid.
+    
+    IF textid IS NOT INITIAL.
+      if_t100_message~t100key = textid.
+    ELSE.
+      if_t100_message~t100key = customer_not_found.
+    ENDIF.
+  ENDMETHOD.
+
+ENDCLASS.
+```
+
+## Exception Handling Patterns
+
+### TRY-CATCH Blocks
+
+#### Basic Pattern
+```abap
+DATA: lx_not_found TYPE REF TO zcx_customer_not_found,
+      lx_auth TYPE REF TO zcx_authorization_error,
+      lx_root TYPE REF TO cx_root.
+
+TRY.
+    " Business logic
+    lo_customer->get_customer_data( IMPORTING es_customer = ls_customer ).
+    
+  CATCH zcx_customer_not_found INTO lx_not_found.
+    " Handle specific exception
+    MESSAGE lx_not_found->get_text( ) TYPE 'E'.
+    
+  CATCH zcx_authorization_error INTO lx_auth.
+    " Handle authorization error
+    MESSAGE lx_auth->get_text( ) TYPE 'E'.
+    
+  CATCH cx_root INTO lx_root.
+    " Handle unexpected errors
+    " Log error
+    MESSAGE 'Unexpected error occurred' TYPE 'E'.
+ENDTRY.
+```
+
+#### Nested TRY-CATCH
+```abap
+DATA: lx_validation TYPE REF TO zcx_validation_error,
+      lx_error TYPE REF TO zcx_customer_error.
+
+TRY.
+    " Outer operation
+    lo_customer->validate_customer( ).
+    
+    TRY.
+        " Inner operation
+        lo_customer->update_customer_data( is_customer = ls_customer ).
+        
+      CATCH zcx_validation_error INTO lx_validation.
+        " Handle validation error
+        MESSAGE lx_validation->get_text( ) TYPE 'E'.
+        RETURN.
+    ENDTRY.
+    
+  CATCH zcx_customer_error INTO lx_error.
+    " Handle customer error
+    MESSAGE lx_error->get_text( ) TYPE 'E'.
+ENDTRY.
+```
+
+#### Exception Propagation
+```abap
+METHOD process_customer.
+  TRY.
+      validate_input( is_customer = is_customer ).
+      update_customer_data( is_customer = is_customer ).
+      
+    CATCH zcx_validation_error.
+      " Re-raise with additional context
+      RAISE EXCEPTION TYPE zcx_customer_error
+        EXPORTING
+          textid = zcx_customer_error=>validation_failed
+          previous = sy-subrc.
+  ENDTRY.
+ENDMETHOD.
+```
+
+### Exception Handling in Function Modules
+
+```abap
+FUNCTION z_get_customer_data.
+  " Input validation
+  IF iv_customer_id IS INITIAL.
+    MESSAGE e001(z_customer_msg) RAISING customer_not_found.
+  ENDIF.
+
+  " Business logic
+  SELECT SINGLE * FROM kna1
+    INTO es_customer
+    WHERE kunnr = iv_customer_id.
+
+  IF sy-subrc <> 0.
+    MESSAGE e002(z_customer_msg) WITH iv_customer_id
+      RAISING customer_not_found.
+  ENDIF.
+
+ENDFUNCTION.
+
+" Calling function module
+CALL FUNCTION 'Z_GET_CUSTOMER_DATA'
+  EXPORTING
+    iv_customer_id = lv_customer_id
+  IMPORTING
+    es_customer = ls_customer
+  EXCEPTIONS
+    customer_not_found = 1
+    OTHERS = 2.
+
+CASE sy-subrc.
+  WHEN 0.
+    " Success
+  WHEN 1.
+    MESSAGE e001(z_customer_msg) WITH lv_customer_id.
+  WHEN OTHERS.
+    MESSAGE e999(z_customer_msg).
+ENDCASE.
+```
+
+### Exception Handling in Reports
+
+```abap
+DATA: lx_error TYPE REF TO zcx_customer_error,
+      lx_root TYPE REF TO cx_root.
+
+START-OF-SELECTION.
+  TRY.
+      " Main processing
+      PERFORM get_customer_data.
+      PERFORM process_data.
+      PERFORM display_results.
+      
+    CATCH zcx_customer_error INTO lx_error.
+      " Display error message
+      MESSAGE lx_error->get_text( ) TYPE 'E'.
+      
+    CATCH cx_root INTO lx_root.
+      " Log unexpected error
+      PERFORM log_error USING lx_root.
+      MESSAGE 'An unexpected error occurred. Please contact support.' TYPE 'E'.
+ENDTRY.
+```
+
+## Error Logging
+
+### Application Log (SLG0/SLG1)
+
+#### Logging Interface
+```abap
+INTERFACE zif_logger.
+  METHODS: log_error
+             IMPORTING iv_message TYPE string
+                       iv_exception TYPE REF TO cx_root OPTIONAL,
+             log_warning
+               IMPORTING iv_message TYPE string,
+             log_info
+               IMPORTING iv_message TYPE string,
+             log_success
+               IMPORTING iv_message TYPE string.
+ENDINTERFACE.
+```
+
+#### Logging Implementation
+```abap
+CLASS zcl_application_logger DEFINITION.
+  PUBLIC SECTION.
+    METHODS: constructor
+               IMPORTING iv_object TYPE balobj_d
+                         iv_subobject TYPE balsubobj,
+             log_message
+               IMPORTING iv_msgty TYPE symsgty
+                         iv_msgid TYPE symsgid
+                         iv_msgno TYPE symsgno
+                         iv_msgv1 TYPE symsgv OPTIONAL
+                         iv_msgv2 TYPE symsgv OPTIONAL
+                         iv_msgv3 TYPE symsgv OPTIONAL
+                         iv_msgv4 TYPE symsgv OPTIONAL
+                         iv_exception TYPE REF TO cx_root OPTIONAL.
+  
+  PRIVATE SECTION.
+    DATA: mv_log_handle TYPE balloghndl,
+          mv_object TYPE balobj_d,
+          mv_subobject TYPE balsubobj.
+ENDCLASS.
+
+CLASS zcl_application_logger IMPLEMENTATION.
+
+  METHOD constructor.
+    mv_object = iv_object.
+    mv_subobject = iv_subobject.
+    
+    DATA: ls_log TYPE bal_s_log,
+          lv_extnumber TYPE balnrext.
+
+    CONCATENATE sy-uname sy-datum sy-uzeit INTO lv_extnumber SEPARATED BY '-'.
+
+    ls_log-object = mv_object.
+    ls_log-subobject = mv_subobject.
+    ls_log-extnumber = lv_extnumber.
+
+    CALL FUNCTION 'BAL_LOG_CREATE'
+      EXPORTING
+        i_s_log = ls_log
+      IMPORTING
+        e_log_handle = mv_log_handle
+      EXCEPTIONS
+        OTHERS = 1.
+    
+    IF sy-subrc <> 0.
+      " Handle error
+    ENDIF.
+  ENDMETHOD.
+
+  METHOD log_message.
+    DATA: ls_msg TYPE bal_s_msg.
+
+    ls_msg-msgty = iv_msgty.
+    ls_msg-msgid = iv_msgid.
+    ls_msg-msgno = iv_msgno.
+    ls_msg-msgv1 = iv_msgv1.
+    ls_msg-msgv2 = iv_msgv2.
+    ls_msg-msgv3 = iv_msgv3.
+    ls_msg-msgv4 = iv_msgv4.
+
+    " Add exception details if provided
+    IF iv_exception IS BOUND.
+      ls_msg-probclass = '1'. " High priority
+      " Add exception text to message variables if space available
+    ENDIF.
+
+    CALL FUNCTION 'BAL_LOG_MSG_ADD'
+      EXPORTING
+        i_log_handle = mv_log_handle
+        i_s_msg = ls_msg
+      EXCEPTIONS
+        OTHERS = 1.
+
+    IF sy-subrc <> 0.
+      " Handle error
+    ENDIF.
+  ENDMETHOD.
+
+ENDCLASS.
+```
+
+#### Usage Example
+```abap
+DATA: lo_logger TYPE REF TO zcl_application_logger,
+      lx_error TYPE REF TO zcx_customer_error,
+      lt_log_handle TYPE bal_t_logh.
+
+" Create logger
+CREATE OBJECT lo_logger
+  EXPORTING
+    iv_object = 'Z_CUSTOMER'
+    iv_subobject = 'DATA_ACCESS'.
+
+TRY.
+    " Business logic
+    lo_customer->update_customer_data( is_customer = ls_customer ).
+    
+    " Log success
+    lo_logger->log_message(
+      iv_msgty = 'S'
+      iv_msgid = 'Z_CUSTOMER_MSG'
+      iv_msgno = '001'
+      iv_msgv1 = ls_customer-kunnr
+    ).
+    
+  CATCH zcx_customer_error INTO lx_error.
+    " Log error
+    lo_logger->log_message(
+      iv_msgty = 'E'
+      iv_msgid = 'Z_CUSTOMER_MSG'
+      iv_msgno = '002'
+      iv_msgv1 = ls_customer-kunnr
+      iv_exception = lx_error
+    ).
+    
+    " Save log
+    APPEND lo_logger->mv_log_handle TO lt_log_handle.
+    CALL FUNCTION 'BAL_DB_SAVE'
+      EXPORTING
+        i_t_log_handle = lt_log_handle.
+    
+    RAISE.
+ENDTRY.
+```
+
+### System Messages
+
+#### Message Classes
+- Create message classes in SE91
+- Use meaningful message numbers
+- Include placeholders for variables
+- Document message usage
+
+#### Message Types
+- **E (Error)**: Stops processing, user must correct
+- **W (Warning)**: Continues processing, user can proceed
+- **I (Information)**: Informational message
+- **S (Success)**: Success confirmation
+- **A (Abort)**: Aborts program execution
+- **X (Exit)**: Exits program with dump
+
+#### Message Usage
+```abap
+" Simple message
+MESSAGE e001(z_customer_msg) WITH lv_customer_id.
+
+" Message with multiple variables
+MESSAGE e002(z_customer_msg) WITH lv_customer_id lv_company_code lv_date lv_time.
+
+" Message from exception
+MESSAGE lx_error->get_text( ) TYPE 'E'.
+
+" Message with type from variable
+DATA: lv_msgty TYPE symsgty VALUE 'E'.
+MESSAGE ID 'Z_CUSTOMER_MSG' TYPE lv_msgty NUMBER '001' WITH lv_customer_id.
+```
+
+## Error Handling Best Practices
+
+### Input Validation
+```abap
+METHOD validate_input.
+  " Check mandatory fields
+  IF is_customer-kunnr IS INITIAL.
+    RAISE EXCEPTION TYPE zcx_validation_error
+      EXPORTING
+        textid = zcx_validation_error=>mandatory_field
+        mv_field = 'KUNNR'.
+  ENDIF.
+
+  " Check field format
+  IF strlen( is_customer-kunnr ) <> 10.
+    RAISE EXCEPTION TYPE zcx_validation_error
+      EXPORTING
+        textid = zcx_validation_error=>invalid_format
+        mv_field = 'KUNNR'.
+  ENDIF.
+
+  " Check business rules
+  IF is_customer-name1 IS INITIAL.
+    RAISE EXCEPTION TYPE zcx_validation_error
+      EXPORTING
+        textid = zcx_validation_error=>business_rule_violation
+        mv_message = 'Customer name is mandatory'.
+  ENDIF.
+ENDMETHOD.
+```
+
+### Database Operation Error Handling
+```abap
+" SELECT error handling
+DATA: ls_customer TYPE kna1,
+      lv_message TYPE string.
+
+SELECT SINGLE kunnr name1
+  FROM kna1
+  INTO ls_customer
+  WHERE kunnr = lv_customer_id.
+
+CASE sy-subrc.
+  WHEN 0.
+    " Success
+  WHEN 4.
+    RAISE EXCEPTION TYPE zcx_customer_not_found
+      EXPORTING
+        mv_customer_id = lv_customer_id.
+  WHEN 8.
+    RAISE EXCEPTION TYPE zcx_database_error
+      EXPORTING
+        mv_message = 'Multiple records found'.
+  WHEN OTHERS.
+    RAISE EXCEPTION TYPE zcx_database_error
+      EXPORTING
+        mv_message = 'Database error occurred'.
+ENDCASE.
+
+" UPDATE error handling
+UPDATE kna1 FROM ls_customer.
+
+IF sy-subrc <> 0.
+  ROLLBACK WORK.
+  CONCATENATE 'Update failed for customer' ls_customer-kunnr INTO lv_message SEPARATED BY space.
+  RAISE EXCEPTION TYPE zcx_database_error
+    EXPORTING
+      mv_message = lv_message.
+ENDIF.
+
+COMMIT WORK.
+```
+
+### Authorization Error Handling
+```abap
+METHOD check_authorization.
+  AUTHORITY-CHECK OBJECT 'F_BKPF_BUK'
+    ID 'ACTVT' FIELD '03'
+    ID 'BUKRS' FIELD mv_company_code.
+
+  IF sy-subrc <> 0.
+    RAISE EXCEPTION TYPE zcx_authorization_error
+      EXPORTING
+        textid = zcx_authorization_error=>no_authorization
+        mv_company_code = mv_company_code
+        mv_user = sy-uname.
+  ENDIF.
+ENDMETHOD.
+```
+
+## Error Recovery Strategies
+
+### Retry Logic
+```abap
+METHOD process_with_retry.
+  DATA: lv_retry_count TYPE i VALUE 0,
+        lv_max_retries TYPE i VALUE 3,
+        lx_db_error TYPE REF TO zcx_database_error.
+
+  WHILE lv_retry_count < lv_max_retries.
+    TRY.
+        " Operation
+        lo_customer->update_customer_data( is_customer = ls_customer ).
+        RETURN. " Success
+        
+      CATCH zcx_database_error INTO lx_db_error.
+        lv_retry_count = lv_retry_count + 1.
+        
+        IF lv_retry_count >= lv_max_retries.
+          RAISE.
+        ENDIF.
+        
+        " Wait before retry
+        WAIT UP TO 1 SECONDS.
+    ENDTRY.
+  ENDWHILE.
+ENDMETHOD.
+```
+
+### Fallback Mechanisms
+```abap
+METHOD get_customer_data_with_fallback.
+  DATA: lx_error TYPE REF TO cx_root.
+
+  TRY.
+      " Try primary source
+      SELECT SINGLE * FROM kna1
+        INTO es_customer
+        WHERE kunnr = iv_customer_id.
+        
+    CATCH cx_root.
+      " Fallback to secondary source
+      TRY.
+          SELECT SINGLE * FROM kna1_archive
+            INTO es_customer
+            WHERE kunnr = iv_customer_id.
+        CATCH cx_root INTO lx_error.
+          RAISE EXCEPTION TYPE zcx_customer_not_found.
+      ENDTRY.
+  ENDTRY.
+ENDMETHOD.
+```
+
+## Error Handling Checklist
+
+- [ ] All exceptions inherit from appropriate base class
+- [ ] Custom exception classes have text IDs defined
+- [ ] All database operations check SY-SUBRC
+- [ ] TRY-CATCH blocks handle all expected exceptions
+- [ ] Unexpected exceptions are caught and logged
+- [ ] Error messages are user-friendly and actionable
+- [ ] Errors are logged for debugging
+- [ ] Transactions are rolled back on errors
+- [ ] Input validation occurs before processing
+- [ ] Authorization checks are performed
+- [ ] Error recovery strategies are implemented where appropriate

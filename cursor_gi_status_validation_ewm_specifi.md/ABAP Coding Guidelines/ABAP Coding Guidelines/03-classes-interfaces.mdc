@@ -1,0 +1,551 @@
+---
+description: ABAP classes and interfaces standards for ECC 6.0 EHP 6 ABAP 731 SP0008
+alwaysApply: false
+globs: ["**/*.clas/**"]
+---
+
+# Classes and Interfaces
+
+## Target Environment
+- **SAP ECC 6.0 EHP 6**
+- **ABAP 731 SP0008**
+- Object-oriented ABAP development
+
+## Database Access Rules
+
+### Native SQL Prohibition
+- **NEVER use Native SQL** in class methods
+- Always use Open SQL (ABAP SQL) for all database operations
+- Native SQL (`EXEC SQL ... ENDEXEC`) is strictly forbidden
+- Use standard ABAP SELECT, INSERT, UPDATE, DELETE, MODIFY statements only
+
+## Class Structure
+
+### Required Components
+1. **Class definition** with PUBLIC, PROTECTED, PRIVATE sections
+2. **Class documentation** in comment block
+3. **Interfaces** implementation (if needed)
+4. **Attributes** with proper visibility
+5. **Methods** with proper visibility and documentation
+6. **Constructor** for initialization
+7. **Exception handling** throughout
+8. **Class implementation** with all methods
+
+### Standard Class Template
+```abap
+*----------------------------------------------------------------------*
+* Class: ZCL_CUSTOMER_MANAGER
+* Description: Manages customer master data operations
+* Author: Development Team
+* Date: YYYY-MM-DD
+*----------------------------------------------------------------------*
+
+CLASS zcl_customer_manager DEFINITION
+  PUBLIC
+  FINAL
+  CREATE PUBLIC.
+
+  PUBLIC SECTION.
+    " Types
+    TYPES: BEGIN OF ty_customer_data,
+             kunnr TYPE kunnr,
+             name1 TYPE name1_gp,
+             name2 TYPE name2_gp,
+             ort01 TYPE ort01_gp,
+           END OF ty_customer_data,
+           ty_customer_data_tab TYPE STANDARD TABLE OF ty_customer_data
+                                 WITH NON-UNIQUE KEY kunnr.
+
+    " Constructor
+    METHODS: constructor
+               IMPORTING iv_customer_id TYPE kunnr
+                         iv_company_code TYPE bukrs
+               RAISING   zcx_customer_error.
+
+    " Public methods
+    METHODS: get_customer_data
+               EXPORTING es_customer TYPE kna1
+               RAISING   zcx_customer_not_found
+                         zcx_authorization_error,
+             
+             update_customer_data
+               IMPORTING is_customer TYPE kna1
+               RAISING   zcx_customer_error
+                         zcx_validation_error,
+             
+             validate_customer
+               RETURNING VALUE(rv_valid) TYPE abap_bool
+               RAISING   zcx_customer_error.
+
+  PROTECTED SECTION.
+    " Protected methods for inheritance
+    METHODS: check_authorization
+               RAISING zcx_authorization_error.
+
+  PRIVATE SECTION.
+    " Private attributes
+    DATA: mv_customer_id TYPE kunnr,
+          mv_company_code TYPE bukrs,
+          mv_language TYPE spras.
+
+    " Private methods
+    METHODS: load_customer_data
+               RAISING zcx_customer_not_found,
+             
+             validate_input
+               IMPORTING is_customer TYPE kna1
+               RAISING   zcx_validation_error.
+
+ENDCLASS.
+
+CLASS zcl_customer_manager IMPLEMENTATION.
+
+  METHOD constructor.
+    " Input validation
+    IF iv_customer_id IS INITIAL.
+      RAISE EXCEPTION TYPE zcx_customer_error
+        EXPORTING
+          textid = zcx_customer_error=>invalid_input
+          mv_message = 'Customer ID is mandatory'.
+    ENDIF.
+
+    IF iv_company_code IS INITIAL.
+      RAISE EXCEPTION TYPE zcx_customer_error
+        EXPORTING
+          textid = zcx_customer_error=>invalid_input
+          mv_message = 'Company code is mandatory'.
+    ENDIF.
+
+    " Set attributes
+    mv_customer_id = iv_customer_id.
+    mv_company_code = iv_company_code.
+    mv_language = sy-langu.
+
+    " Authorization check
+    TRY.
+        check_authorization( ).
+      CATCH zcx_authorization_error.
+        RAISE.
+    ENDTRY.
+  ENDMETHOD.
+
+  METHOD get_customer_data.
+    " Load customer data
+    TRY.
+        load_customer_data( ).
+      CATCH zcx_customer_not_found.
+        RAISE.
+    ENDTRY.
+
+    " Retrieve from private attribute or reload
+    SELECT SINGLE kunnr name1 name2 ort01 pstlz land1
+      FROM kna1
+      INTO CORRESPONDING FIELDS OF es_customer
+      WHERE kunnr = mv_customer_id
+        AND bukrs = mv_company_code
+        AND spras = mv_language.
+
+    IF sy-subrc <> 0.
+      RAISE EXCEPTION TYPE zcx_customer_not_found
+        EXPORTING
+          textid = zcx_customer_not_found=>not_found
+          mv_customer_id = mv_customer_id.
+    ENDIF.
+  ENDMETHOD.
+
+  METHOD update_customer_data.
+    " Validate input
+    TRY.
+        validate_input( is_customer = is_customer ).
+      CATCH zcx_validation_error.
+        RAISE.
+    ENDTRY.
+
+    " Update database
+    UPDATE kna1 FROM is_customer.
+    
+    IF sy-subrc <> 0.
+      RAISE EXCEPTION TYPE zcx_customer_error
+        EXPORTING
+          textid = zcx_customer_error=>update_failed
+          mv_message = 'Failed to update customer data'.
+    ENDIF.
+
+    COMMIT WORK.
+  ENDMETHOD.
+
+  METHOD validate_customer.
+    DATA: lv_exists TYPE abap_bool,
+          lv_kunnr TYPE kunnr.
+
+    SELECT SINGLE kunnr
+      FROM kna1
+      INTO lv_kunnr
+      WHERE kunnr = mv_customer_id
+        AND bukrs = mv_company_code.
+
+    rv_valid = boolc( sy-subrc = 0 ).
+  ENDMETHOD.
+
+  METHOD check_authorization.
+    AUTHORITY-CHECK OBJECT 'F_BKPF_BUK'
+      ID 'ACTVT' FIELD '03'
+      ID 'BUKRS' FIELD mv_company_code.
+
+    IF sy-subrc <> 0.
+      RAISE EXCEPTION TYPE zcx_authorization_error
+        EXPORTING
+          textid = zcx_authorization_error=>no_authorization
+          mv_company_code = mv_company_code.
+    ENDIF.
+  ENDMETHOD.
+
+  METHOD load_customer_data.
+    " Implementation for loading customer data
+    " Can be used for caching or lazy loading
+  ENDMETHOD.
+
+  METHOD validate_input.
+    " Input validation logic
+    IF is_customer-kunnr IS INITIAL.
+      RAISE EXCEPTION TYPE zcx_validation_error
+        EXPORTING
+          textid = zcx_validation_error=>mandatory_field
+          mv_field = 'KUNNR'.
+    ENDIF.
+
+    IF is_customer-name1 IS INITIAL.
+      RAISE EXCEPTION TYPE zcx_validation_error
+        EXPORTING
+          textid = zcx_validation_error=>mandatory_field
+          mv_field = 'NAME1'.
+    ENDIF.
+  ENDMETHOD.
+
+ENDCLASS.
+```
+
+## Class Design Principles
+
+### SOLID Principles
+
+#### Single Responsibility Principle
+- Each class should have one reason to change
+- Keep classes focused on single responsibility
+- Split large classes into smaller, focused classes
+
+#### Open/Closed Principle
+- Classes should be open for extension, closed for modification
+- Use inheritance and interfaces for extension
+- Avoid modifying existing classes when adding features
+
+#### Liskov Substitution Principle
+- Subclasses should be substitutable for their base classes
+- Maintain behavioral compatibility in inheritance hierarchies
+
+#### Interface Segregation Principle
+- Clients should not depend on interfaces they don't use
+- Create focused, specific interfaces
+- Avoid large, monolithic interfaces
+
+#### Dependency Inversion Principle
+- Depend on abstractions, not concretions
+- Use interfaces for dependencies
+- Enable dependency injection
+
+### Visibility Sections
+
+#### PUBLIC SECTION
+- Methods and attributes accessible from outside the class
+- Public API of the class
+- Should be minimal and well-documented
+- Includes constructor and main business methods
+
+#### PROTECTED SECTION
+- Methods and attributes accessible from subclasses
+- Used for inheritance scenarios
+- Internal implementation details for subclasses
+
+#### PRIVATE SECTION
+- Methods and attributes only accessible within the class
+- Internal implementation details
+- Helper methods and attributes
+- Should contain most of the class implementation
+
+### Class Attributes
+
+#### Instance Attributes
+- Use `DATA` for instance attributes
+- Prefix with `mv_` (member variable)
+- Initialize in constructor
+- Use appropriate visibility
+
+#### Class Attributes
+- Use `CLASS-DATA` for class attributes (shared across instances)
+- Prefix with `mc_` for constants, `mg_` for variables
+- Use sparingly (consider thread safety)
+
+#### Constants
+- Use `CONSTANTS` for class constants
+- Prefix with `gc_` (global constant)
+- Define in appropriate section
+
+### Methods
+
+#### Method Types
+- **Instance methods**: `METHODS` (operate on instance)
+- **Class methods**: `CLASS-METHODS` (operate on class, no instance needed)
+- **Constructor**: `METHODS constructor` (initialize instance)
+
+#### Method Parameters
+- **IMPORTING**: Input parameters (use `iv_` prefix)
+- **EXPORTING**: Output parameters (use `ev_` prefix)
+- **CHANGING**: Input/output parameters (use `cv_` prefix)
+- **RETURNING**: Single return value (use `rv_` prefix)
+- **RAISING**: Exception classes
+
+#### Method Documentation
+- Document all public methods
+- Include parameter descriptions
+- Document exceptions
+- Include usage examples for complex methods
+
+### Best Practices
+
+#### Constructor
+- Validate all input parameters
+- Initialize all instance attributes
+- Perform authorization checks if needed
+- Raise exceptions for invalid input
+- Keep constructor simple (delegate to private methods)
+
+#### Method Design
+- Keep methods small and focused
+- One method = one logical operation
+- Use meaningful method names
+- Prefer RETURNING for single return values
+- Use EXPORTING for multiple return values
+- Always handle exceptions appropriately
+
+#### Error Handling
+- Use custom exception classes (ZCX_ prefix)
+- Raise exceptions for error conditions
+- Don't return error codes (use exceptions)
+- Provide meaningful error messages
+- Log errors appropriately
+
+#### Dependency Injection
+- Accept dependencies in constructor
+- Use interfaces for dependencies
+- Enable testability through injection
+- Avoid hard-coded dependencies
+
+## Interfaces
+
+### Interface Structure
+
+#### Standard Interface Template
+```abap
+*----------------------------------------------------------------------*
+* Interface: ZIF_DATA_ACCESS
+* Description: Interface for data access operations
+*----------------------------------------------------------------------*
+
+INTERFACE zif_data_access.
+  
+  " Types
+  TYPES: ty_key TYPE kunnr,
+         ty_data TYPE kna1.
+
+  " Methods
+  METHODS: read_data
+             IMPORTING iv_key TYPE ty_key
+             EXPORTING es_data TYPE ty_data
+             RAISING   zcx_data_error,
+           
+           save_data
+             IMPORTING is_data TYPE ty_data
+             RAISING   zcx_data_error
+                       zcx_validation_error,
+           
+           delete_data
+             IMPORTING iv_key TYPE ty_key
+             RAISING   zcx_data_error.
+
+  " Constants
+  CONSTANTS: gc_max_retries TYPE i VALUE 3.
+
+ENDINTERFACE.
+```
+
+### Interface Best Practices
+
+#### Design Principles
+- Keep interfaces focused and cohesive
+- Define clear contracts
+- Use interfaces for abstraction
+- Implement multiple interfaces when needed
+- Document all interface methods
+
+#### Usage
+- Use interfaces for dependency inversion
+- Implement interfaces in classes
+- Reference interfaces, not concrete classes
+- Enable polymorphism through interfaces
+
+#### Implementation Example
+```abap
+CLASS zcl_customer_data_access DEFINITION.
+  PUBLIC SECTION.
+    INTERFACES zif_data_access.
+    
+    METHODS: constructor
+               IMPORTING io_logger TYPE REF TO zif_logger.
+  
+  PRIVATE SECTION.
+    DATA: mo_logger TYPE REF TO zif_logger.
+ENDCLASS.
+
+CLASS zcl_customer_data_access IMPLEMENTATION.
+
+  METHOD zif_data_access~read_data.
+    " Implementation
+    SELECT SINGLE * FROM kna1
+      INTO es_data
+      WHERE kunnr = iv_key.
+    
+    IF sy-subrc <> 0.
+      RAISE EXCEPTION TYPE zcx_data_error.
+    ENDIF.
+  ENDMETHOD.
+
+  METHOD zif_data_access~save_data.
+    " Implementation
+    MODIFY kna1 FROM is_data.
+    
+    IF sy-subrc <> 0.
+      RAISE EXCEPTION TYPE zcx_data_error.
+    ENDIF.
+  ENDMETHOD.
+
+  METHOD zif_data_access~delete_data.
+    " Implementation
+    DELETE FROM kna1 WHERE kunnr = iv_key.
+    
+    IF sy-subrc <> 0.
+      RAISE EXCEPTION TYPE zcx_data_error.
+    ENDIF.
+  ENDMETHOD.
+
+ENDCLASS.
+```
+
+## Exception Classes
+
+### Custom Exception Classes
+
+#### Structure
+- Inherit from `CX_STATIC_CHECK` or `CX_DYNAMIC_CHECK`
+- Use `ZCX_` or `YCX_` prefix
+- Define text IDs for error messages
+- Include relevant attributes
+
+#### Example
+```abap
+CLASS zcx_customer_error DEFINITION
+  INHERITING FROM cx_static_check
+  PUBLIC
+  FINAL
+  CREATE PUBLIC.
+
+  PUBLIC SECTION.
+    INTERFACES: if_t100_message.
+
+    CONSTANTS: BEGIN OF invalid_input,
+                 msgid TYPE symsgid VALUE 'Z_CUSTOMER_MSG',
+                 msgno TYPE symsgno VALUE '001',
+                 attr1 TYPE scx_attrname VALUE 'MV_MESSAGE',
+                 attr2 TYPE scx_attrname VALUE '',
+                 attr3 TYPE scx_attrname VALUE '',
+                 attr4 TYPE scx_attrname VALUE '',
+               END OF invalid_input.
+
+    DATA: mv_message TYPE string READ-ONLY.
+
+    METHODS: constructor
+               IMPORTING textid LIKE if_t100_message=>t100key OPTIONAL
+                         previous LIKE previous OPTIONAL
+                         mv_message TYPE string OPTIONAL.
+
+ENDCLASS.
+
+CLASS zcx_customer_error IMPLEMENTATION.
+
+  METHOD constructor.
+    super->constructor( previous = previous ).
+    me->mv_message = mv_message.
+    CLEAR me->textid.
+    
+    IF textid IS NOT INITIAL.
+      if_t100_message~t100key = textid.
+    ELSE.
+      if_t100_message~t100key = invalid_input.
+    ENDIF.
+  ENDMETHOD.
+
+ENDCLASS.
+```
+
+### Exception Handling
+
+#### TRY-CATCH Blocks
+```abap
+DATA: lx_not_found TYPE REF TO zcx_customer_not_found,
+      lx_auth TYPE REF TO zcx_authorization_error,
+      lx_root TYPE REF TO cx_root.
+
+TRY.
+    lo_customer->get_customer_data( IMPORTING es_customer = ls_customer ).
+    
+  CATCH zcx_customer_not_found INTO lx_not_found.
+    MESSAGE lx_not_found->get_text( ) TYPE 'E'.
+    
+  CATCH zcx_authorization_error INTO lx_auth.
+    MESSAGE lx_auth->get_text( ) TYPE 'E'.
+    
+  CATCH cx_root INTO lx_root.
+    " Log unexpected errors
+    MESSAGE 'Unexpected error occurred' TYPE 'E'.
+ENDTRY.
+```
+
+## Class Usage Patterns
+
+### Factory Pattern
+```abap
+CLASS zcl_customer_factory DEFINITION.
+  PUBLIC SECTION.
+    CLASS-METHODS: create_manager
+                     IMPORTING iv_customer_id TYPE kunnr
+                               iv_company_code TYPE bukrs
+                     RETURNING VALUE(ro_manager) TYPE REF TO zcl_customer_manager
+                     RAISING   zcx_customer_error.
+ENDCLASS.
+```
+
+### Singleton Pattern
+```abap
+CLASS zcl_configuration DEFINITION.
+  PUBLIC SECTION.
+    CLASS-METHODS: get_instance
+                     RETURNING VALUE(ro_instance) TYPE REF TO zcl_configuration.
+  
+  PRIVATE SECTION.
+    CLASS-DATA: go_instance TYPE REF TO zcl_configuration.
+ENDCLASS.
+```
+
+### Strategy Pattern
+- Use interfaces for different strategies
+- Implement multiple strategy classes
+- Select strategy at runtime

@@ -1,0 +1,425 @@
+---
+description: Security, authorization checks, and data protection standards for ECC 6.0 EHP 6 ABAP 731 SP0008
+alwaysApply: true
+globs: []
+---
+
+# Security and Authorization
+
+## Target Environment
+- **SAP ECC 6.0 EHP 6**
+- **ABAP 731 SP0008**
+- Enterprise security standards
+
+## Authorization Checks
+
+### AUTHORITY-CHECK Statement
+
+#### Basic Pattern
+```abap
+AUTHORITY-CHECK OBJECT 'OBJECT_NAME'
+  ID 'FIELD1' FIELD lv_field1
+  ID 'FIELD2' FIELD lv_field2
+  ID 'ACTVT' FIELD '03'.
+
+IF sy-subrc <> 0.
+  " Authorization failed
+  RAISE EXCEPTION TYPE zcx_authorization_error
+    EXPORTING
+      textid = zcx_authorization_error=>no_authorization
+      mv_object = 'OBJECT_NAME'.
+ENDIF.
+```
+
+#### Common Authorization Objects
+- **F_BKPF_BUK**: Company code authorization
+- **F_BKPF_BUK**: Document authorization
+- **F_MARA_MAT**: Material master authorization
+- **F_KNA1_BUK**: Customer master authorization
+- **F_LFA1_BUK**: Vendor master authorization
+- **F_BKPF_BUK**: General ledger authorization
+
+#### Activity Values
+- **01**: Create
+- **02**: Change
+- **03**: Display
+- **06**: Delete
+- **08**: Lock
+- **09**: Unlock
+
+### Authorization Check Examples
+
+#### Company Code Authorization
+```abap
+METHOD check_company_code_authorization.
+  AUTHORITY-CHECK OBJECT 'F_BKPF_BUK'
+    ID 'ACTVT' FIELD '03'
+    ID 'BUKRS' FIELD iv_company_code.
+
+  IF sy-subrc <> 0.
+    RAISE EXCEPTION TYPE zcx_authorization_error
+      EXPORTING
+        textid = zcx_authorization_error=>no_company_code_auth
+        mv_company_code = iv_company_code
+        mv_user = sy-uname.
+  ENDIF.
+ENDMETHOD.
+```
+
+#### Material Master Authorization
+```abap
+METHOD check_material_authorization.
+  AUTHORITY-CHECK OBJECT 'F_MARA_MAT'
+    ID 'ACTVT' FIELD iv_activity
+    ID 'MATNR' FIELD iv_material
+    ID 'WERKS' FIELD iv_plant.
+
+  IF sy-subrc <> 0.
+    RAISE EXCEPTION TYPE zcx_authorization_error
+      EXPORTING
+        textid = zcx_authorization_error=>no_material_auth
+        mv_material = iv_material.
+  ENDIF.
+ENDMETHOD.
+```
+
+#### Customer Master Authorization
+```abap
+METHOD check_customer_authorization.
+  AUTHORITY-CHECK OBJECT 'F_KNA1_BUK'
+    ID 'ACTVT' FIELD iv_activity
+    ID 'KUNNR' FIELD iv_customer_id
+    ID 'BUKRS' FIELD iv_company_code.
+
+  IF sy-subrc <> 0.
+    RAISE EXCEPTION TYPE zcx_authorization_error
+      EXPORTING
+        textid = zcx_authorization_error=>no_customer_auth
+        mv_customer_id = iv_customer_id.
+  ENDIF.
+ENDMETHOD.
+```
+
+### Authorization Check in Reports
+
+```abap
+AT SELECTION-SCREEN.
+  " Check authorization before processing
+  AUTHORITY-CHECK OBJECT 'F_BKPF_BUK'
+    ID 'ACTVT' FIELD '03'
+    ID 'BUKRS' FIELD p_bukrs.
+
+  IF sy-subrc <> 0.
+    MESSAGE e001(z_auth_msg) WITH p_bukrs.
+  ENDIF.
+
+START-OF-SELECTION.
+  " Additional authorization checks in processing
+  LOOP AT lt_customers INTO ls_customer.
+    AUTHORITY-CHECK OBJECT 'F_KNA1_BUK'
+      ID 'ACTVT' FIELD '03'
+      ID 'KUNNR' FIELD ls_customer-kunnr
+      ID 'BUKRS' FIELD p_bukrs.
+
+    IF sy-subrc = 0.
+      " Process authorized customer
+    ELSE.
+      " Skip unauthorized customer
+      CONTINUE.
+    ENDIF.
+  ENDLOOP.
+```
+
+### Authorization Check in Classes
+
+```abap
+CLASS zcl_customer_manager DEFINITION.
+  PUBLIC SECTION.
+    METHODS: constructor
+               IMPORTING iv_customer_id TYPE kunnr
+                         iv_company_code TYPE bukrs
+               RAISING   zcx_authorization_error.
+  
+  PRIVATE SECTION.
+    METHODS: check_authorization
+               RAISING zcx_authorization_error.
+    
+    DATA: mv_customer_id TYPE kunnr,
+          mv_company_code TYPE bukrs.
+ENDCLASS.
+
+CLASS zcl_customer_manager IMPLEMENTATION.
+
+  METHOD constructor.
+    mv_customer_id = iv_customer_id.
+    mv_company_code = iv_company_code.
+    
+    " Check authorization during construction
+    check_authorization( ).
+  ENDMETHOD.
+
+  METHOD check_authorization.
+    AUTHORITY-CHECK OBJECT 'F_KNA1_BUK'
+      ID 'ACTVT' FIELD '03'
+      ID 'KUNNR' FIELD mv_customer_id
+      ID 'BUKRS' FIELD mv_company_code.
+
+    IF sy-subrc <> 0.
+      RAISE EXCEPTION TYPE zcx_authorization_error
+        EXPORTING
+          textid = zcx_authorization_error=>no_authorization
+          mv_customer_id = mv_customer_id
+          mv_company_code = mv_company_code
+          mv_user = sy-uname.
+    ENDIF.
+  ENDMETHOD.
+
+ENDCLASS.
+```
+
+## Input Validation and Sanitization
+
+### Parameter Validation
+
+```abap
+AT SELECTION-SCREEN ON p_customer_id.
+  " Validate customer ID format
+  IF p_customer_id IS INITIAL.
+    MESSAGE e001(z_validation_msg) WITH 'Customer ID is mandatory'.
+  ENDIF.
+
+  IF strlen( p_customer_id ) <> 10.
+    MESSAGE e002(z_validation_msg) WITH 'Customer ID must be 10 characters'.
+  ENDIF.
+
+  " Check for valid characters (alphanumeric)
+  IF p_customer_id CN '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ'.
+    MESSAGE e003(z_validation_msg) WITH 'Customer ID contains invalid characters'.
+  ENDIF.
+```
+
+### SQL Injection Prevention
+
+#### Native SQL Prohibition
+- **NEVER use Native SQL (EXEC SQL)** - Security and portability risk
+- Native SQL bypasses SAP's security and authorization checks
+- Native SQL can lead to SQL injection vulnerabilities
+- Always use Open SQL (ABAP SQL) for all database operations
+
+#### Good: Parameterized Queries (Open SQL)
+```abap
+" Good: Use variables directly (ABAP 731)
+SELECT kunnr name1
+  FROM kna1
+  INTO TABLE lt_customers
+  WHERE kunnr = lv_customer_id
+    AND bukrs = lv_company_code.
+
+" Good: Use SELECT-OPTIONS
+SELECT kunnr name1
+  FROM kna1
+  INTO TABLE lt_customers
+  WHERE kunnr IN s_kunnr.
+```
+
+#### Bad: Native SQL (FORBIDDEN)
+```abap
+" ❌ FORBIDDEN: Native SQL - Security and portability risk
+EXEC SQL.
+  SELECT kunnr, name1 
+  INTO :lv_kunnr, :lv_name1
+  FROM kna1
+  WHERE kunnr = :lv_customer_id
+ENDEXEC.
+
+" ✅ CORRECT: Use Open SQL instead
+DATA: ls_customer TYPE kna1.
+
+SELECT SINGLE kunnr name1
+  FROM kna1
+  INTO ls_customer
+  WHERE kunnr = lv_customer_id.
+```
+
+#### Bad: Dynamic SQL (Avoid)
+```abap
+" Bad: Dynamic WHERE clause (security risk)
+DATA: lv_where TYPE string.
+CONCATENATE 'kunnr = ''' lv_customer_id '''' INTO lv_where.
+
+SELECT kunnr name1
+  FROM kna1
+  INTO TABLE lt_customers
+  WHERE (lv_where).
+```
+
+### Input Sanitization
+
+```abap
+METHOD sanitize_input.
+  DATA: lv_length TYPE i.
+  
+  " Remove leading/trailing spaces
+  CONDENSE lv_customer_id.
+  
+  " Convert to uppercase
+  TRANSLATE lv_customer_id TO UPPER CASE.
+  
+  " Remove special characters (if needed)
+  " Note: REGEX not available in ABAP 731, use TRANSLATE or loop
+  " TRANSLATE lv_customer_id USING '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ'.
+  
+  " Validate length
+  lv_length = strlen( lv_customer_id ).
+  IF lv_length > 10.
+    RAISE EXCEPTION TYPE zcx_validation_error
+      EXPORTING
+        mv_message = 'Input exceeds maximum length'.
+  ENDIF.
+ENDMETHOD.
+```
+
+## Data Protection
+
+### Sensitive Data Handling
+
+#### Masking Sensitive Data
+```abap
+METHOD mask_sensitive_data.
+  " Mask customer ID (show only last 4 digits)
+  DATA: lv_masked TYPE string,
+        lv_substring TYPE string.
+  
+  lv_substring = iv_customer_id+6(4).
+  CONCATENATE '****' lv_substring INTO lv_masked.
+  
+  " Use in logs/messages
+  MESSAGE i001(z_customer_msg) WITH lv_masked.
+ENDMETHOD.
+```
+
+#### Secure Data Storage
+```abap
+" Never log sensitive data
+" Bad:
+DATA: lv_bad_msg TYPE string.
+CONCATENATE 'Processing customer' ls_customer-kunnr 'with SSN' ls_customer-ssn
+  INTO lv_bad_msg SEPARATED BY space.
+MESSAGE lv_bad_msg TYPE 'I'.
+
+" Good:
+DATA: lv_good_msg TYPE string.
+CONCATENATE 'Processing customer' ls_customer-kunnr INTO lv_good_msg SEPARATED BY space.
+MESSAGE lv_good_msg TYPE 'I'.
+" Store SSN securely, never in logs
+```
+
+### User Context
+
+#### Get Current User
+```abap
+DATA: lv_user TYPE sy-uname,
+      lv_date TYPE sy-datum,
+      lv_time TYPE sy-uzeit.
+
+lv_user = sy-uname.
+lv_date = sy-datum.
+lv_time = sy-uzeit.
+```
+
+#### User-Specific Data Access
+```abap
+METHOD get_user_specific_data.
+  " Only return data for current user
+  SELECT kunnr name1
+    FROM kna1
+    INTO TABLE lt_customers
+    WHERE kunnr IN s_kunnr
+      AND bukrs = p_bukrs
+      AND erdat <= sy-datum
+      AND erusr = sy-uname. " User-specific filter
+ENDMETHOD.
+```
+
+## Security Best Practices
+
+### Password Handling
+- **Never store passwords** in code or configuration
+- Use SAP standard authentication mechanisms
+- Use secure storage for credentials (if needed)
+- Never log passwords or sensitive credentials
+
+### Error Messages
+- **Don't expose system details** in error messages
+- Use generic error messages for security-related failures
+- Don't reveal authorization object names in user messages
+- Log detailed errors internally, show user-friendly messages
+
+```abap
+" Bad: Exposes system details
+MESSAGE |Authorization check failed for object F_BKPF_BUK| TYPE 'E'.
+
+" Good: User-friendly message
+MESSAGE e001(z_auth_msg) WITH 'You are not authorized to access this data'.
+```
+
+### Transaction Security
+
+#### Database Locks
+```abap
+" Use ENQUEUE to prevent concurrent modifications
+CALL FUNCTION 'ENQUEUE_EZ_CUSTOMER'
+  EXPORTING
+    kunnr = lv_customer_id
+  EXCEPTIONS
+    foreign_lock = 1
+    system_failure = 2
+    OTHERS = 3.
+
+IF sy-subrc <> 0.
+  MESSAGE e001(z_customer_msg) WITH 'Customer is being modified by another user'.
+  RETURN.
+ENDIF.
+
+" Perform update
+UPDATE kna1 FROM ls_customer.
+
+" Release lock
+CALL FUNCTION 'DEQUEUE_EZ_CUSTOMER'
+  EXPORTING
+    kunnr = lv_customer_id.
+```
+
+### Audit Logging
+
+#### Log Security Events
+```abap
+METHOD log_security_event.
+  " Log authorization failures
+  DATA: lv_timestamp TYPE string.
+  
+  CONCATENATE sy-datum sy-uzeit INTO lv_timestamp.
+  
+  CALL FUNCTION 'Z_LOG_SECURITY_EVENT'
+    EXPORTING
+      iv_event_type = 'AUTHORIZATION_FAILED'
+      iv_user = sy-uname
+      iv_object = 'F_KNA1_BUK'
+      iv_customer_id = iv_customer_id
+      iv_timestamp = lv_timestamp.
+ENDMETHOD.
+```
+
+## Security Checklist
+
+- [ ] **NEVER use Native SQL (EXEC SQL) - Open SQL only**
+- [ ] Authorization checks performed before data access
+- [ ] All user inputs validated
+- [ ] SQL injection prevented (use Open SQL with variables)
+- [ ] Sensitive data not logged or exposed
+- [ ] Error messages don't expose system details
+- [ ] Database locks used for concurrent access
+- [ ] User context properly used
+- [ ] Audit logging for security events
+- [ ] No hardcoded credentials
+- [ ] Secure data storage practices followed

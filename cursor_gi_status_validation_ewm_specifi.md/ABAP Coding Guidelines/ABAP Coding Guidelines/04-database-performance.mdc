@@ -1,0 +1,826 @@
+---
+description: Database access patterns and performance optimization for ECC 6.0 EHP 6 ABAP 731 SP0008
+alwaysApply: false
+globs: ["**/*.abap", "**/*.clas/**"]
+---
+
+# Database Access and Performance
+
+## Target Environment
+- **SAP ECC 6.0 EHP 6**
+- **ABAP 731 SP0008**
+- Production database performance standards
+
+## Database Access Principles
+
+### Core Rules
+1. **NEVER use Native SQL** - Always use Open SQL (ABAP SQL) only
+2. **Always use WHERE clauses** - Never select all records
+3. **Use field lists** - Avoid SELECT * (specify exact fields needed)
+4. **Check SY-SUBRC** - After every database operation
+5. **Use appropriate SELECT variant** - SINGLE, TABLE, or CURSOR
+6. **Limit result sets** - Use UP TO N ROWS
+7. **Use indexes** - Design queries to use secondary indexes
+8. **Avoid nested loops** - Use JOIN or FOR ALL ENTRIES
+9. **Validate before operations** - Check data before database access
+10. **NEVER specify MANDT in WHERE clauses** - SAP automatically filters by client (unless using CLIENT SPECIFIED)
+
+### Native SQL Prohibition
+
+#### CRITICAL RULE: Never Use Native SQL
+- **Native SQL is STRICTLY PROHIBITED** in all development
+- Native SQL bypasses SAP's database abstraction layer
+- Native SQL creates database portability issues
+- Native SQL can cause security vulnerabilities
+- Native SQL is not supported in all SAP database systems
+
+#### What is Native SQL?
+Native SQL includes:
+- `EXEC SQL ... ENDEXEC` statements
+- Direct database-specific SQL syntax
+- Database vendor-specific functions
+- ADBC (ABAP Database Connectivity) for direct database access
+
+#### Always Use Open SQL (ABAP SQL)
+Open SQL is:
+- Database-independent (works on all SAP-supported databases)
+- Integrated with SAP authorization checks
+- Optimized by SAP database layer
+- Portable across database systems
+- Secure and auditable
+
+#### Examples
+
+```abap
+" ❌ FORBIDDEN: Native SQL
+EXEC SQL.
+  SELECT kunnr, name1 
+  INTO :lv_kunnr, :lv_name1
+  FROM kna1
+  WHERE kunnr = :lv_customer_id
+ENDEXEC.
+
+" ✅ CORRECT: Open SQL
+DATA: ls_customer TYPE kna1.
+
+SELECT SINGLE kunnr name1
+  FROM kna1
+  INTO ls_customer
+  WHERE kunnr = lv_customer_id.
+
+IF sy-subrc <> 0.
+  " Handle error
+ENDIF.
+```
+
+```abap
+" ❌ FORBIDDEN: Native SQL with database-specific syntax
+EXEC SQL.
+  SELECT TOP 100 * FROM kna1
+ENDEXEC.
+
+" ✅ CORRECT: Open SQL with UP TO
+DATA: lt_customers TYPE STANDARD TABLE OF kna1.
+
+SELECT kunnr name1 name2
+  FROM kna1
+  INTO TABLE lt_customers
+  UP TO 100 ROWS.
+
+IF sy-subrc <> 0.
+  " Handle error
+ENDIF.
+```
+
+```abap
+" ❌ FORBIDDEN: Native SQL stored procedure call
+EXEC SQL.
+  EXECUTE sp_get_customer_data :lv_customer_id
+ENDEXEC.
+
+" ✅ CORRECT: Use function module or class method
+DATA: lo_customer TYPE REF TO zcl_customer_manager,
+      ls_customer TYPE kna1.
+
+CREATE OBJECT lo_customer
+  EXPORTING
+    iv_customer_id = lv_customer_id.
+
+lo_customer->get_customer_data(
+  IMPORTING
+    es_customer = ls_customer
+).
+```
+
+## Client Handling (MANDT)
+
+### CRITICAL RULE: Client Field in WHERE Clauses
+
+#### Decision Flow: When to Specify MANDT
+
+**Question 1: Do you need to access data from a different client than the current one?**
+- **NO** → Do NOT specify MANDT in WHERE clause (SAP handles it automatically)
+- **YES** → Proceed to Question 2
+
+**Question 2: Do you have authorization for cross-client access?**
+- **NO** → Do NOT use CLIENT SPECIFIED (request authorization first)
+- **YES** → Use CLIENT SPECIFIED and specify MANDT in WHERE clause
+
+#### Standard Case: No MANDT in WHERE Clause (99% of cases)
+- **Without CLIENT SPECIFIED, you MUST NOT specify MANDT in WHERE clauses**
+- SAP automatically filters all database operations by the current client (sy-mandt)
+- Explicitly including MANDT in WHERE conditions causes compilation errors
+- This applies to SELECT, UPDATE, DELETE, and MODIFY statements
+- **This is the default and preferred approach for all standard business operations**
+
+#### Examples
+
+```abap
+" ❌ FORBIDDEN: MANDT in WHERE clause without CLIENT SPECIFIED
+SELECT SINGLE kunnr name1
+  FROM kna1
+  INTO ls_customer
+  WHERE mandt = sy-mandt
+    AND kunnr = lv_customer_id.
+
+" ✅ CORRECT: Omit MANDT from WHERE clause
+SELECT SINGLE kunnr name1
+  FROM kna1
+  INTO ls_customer
+  WHERE kunnr = lv_customer_id.
+
+" ❌ FORBIDDEN: MANDT in DELETE WHERE clause
+DELETE FROM kna1
+  WHERE mandt = sy-mandt
+    AND kunnr = lv_customer_id.
+
+" ✅ CORRECT: Omit MANDT from DELETE WHERE clause
+DELETE FROM kna1
+  WHERE kunnr = lv_customer_id.
+
+" ❌ FORBIDDEN: MANDT in UPDATE WHERE clause
+UPDATE kna1 SET name1 = lv_name1
+  WHERE mandt = sy-mandt
+    AND kunnr = lv_customer_id.
+
+" ✅ CORRECT: Omit MANDT from UPDATE WHERE clause
+UPDATE kna1 SET name1 = lv_name1
+  WHERE kunnr = lv_customer_id.
+```
+
+#### Setting MANDT for INSERT/UPDATE/MODIFY
+- **You MUST set MANDT when inserting or updating records**
+- Assign `sy-mandt` to the MANDT field in the structure before INSERT/UPDATE/MODIFY
+- This ensures the record is stored in the correct client
+
+```abap
+" ✅ CORRECT: Set MANDT before INSERT
+ls_customer-mandt = sy-mandt.
+ls_customer-kunnr = lv_customer_id.
+ls_customer-name1 = lv_name1.
+
+INSERT kna1 FROM ls_customer.
+
+" ✅ CORRECT: Set MANDT before UPDATE
+ls_customer-mandt = sy-mandt.
+ls_customer-kunnr = lv_customer_id.
+ls_customer-name1 = lv_name1.
+
+UPDATE kna1 FROM ls_customer.
+
+" ✅ CORRECT: Set MANDT before MODIFY
+ls_customer-mandt = sy-mandt.
+ls_customer-kunnr = lv_customer_id.
+ls_customer-name1 = lv_name1.
+
+MODIFY kna1 FROM ls_customer.
+```
+
+#### CLIENT SPECIFIED Usage (When MANDT is Required)
+
+**When to Use CLIENT SPECIFIED:**
+1. **Cross-client data access** - Need to access data from multiple clients
+2. **Client migration** - Copying data between clients
+3. **System administration** - Administrative tasks requiring multi-client access
+4. **Reporting across clients** - Consolidated reporting from multiple clients
+5. **Data synchronization** - Synchronizing data between clients
+
+**Requirements:**
+- Requires special authorization (typically S_TCODE or S_CLIENT_IMP)
+- Must be documented with business justification
+- Should be restricted to specific methods/function modules
+- Consider security implications
+
+**Implementation Pattern:**
+
+```abap
+" ✅ CORRECT: CLIENT SPECIFIED with MANDT in WHERE clause
+" Scenario: Access data from specific client
+DATA: lt_customers TYPE STANDARD TABLE OF kna1,
+      ls_customer TYPE kna1,
+      lv_target_client TYPE mandt VALUE '000'.
+
+" Access data from specific client
+SELECT kunnr name1 name2
+  FROM kna1 CLIENT SPECIFIED
+  INTO TABLE lt_customers
+  WHERE mandt = lv_target_client
+    AND kunnr = lv_customer_id.
+
+IF sy-subrc <> 0.
+  " Handle error
+ENDIF.
+
+" ✅ CORRECT: CLIENT SPECIFIED for multiple clients
+" Scenario: Compare data across clients
+DATA: lt_client_000 TYPE STANDARD TABLE OF kna1,
+      lt_client_100 TYPE STANDARD TABLE OF kna1.
+
+" Get data from client 000
+SELECT kunnr name1
+  FROM kna1 CLIENT SPECIFIED
+  INTO TABLE lt_client_000
+  WHERE mandt = '000'
+    AND kunnr IN s_kunnr.
+
+" Get data from client 100
+SELECT kunnr name1
+  FROM kna1 CLIENT SPECIFIED
+  INTO TABLE lt_client_100
+  WHERE mandt = '100'
+    AND kunnr IN s_kunnr.
+
+" ✅ CORRECT: CLIENT SPECIFIED with UPDATE
+" Scenario: Update data in specific client
+DATA: ls_customer TYPE kna1.
+
+ls_customer-mandt = '000'.
+ls_customer-kunnr = lv_customer_id.
+ls_customer-name1 = lv_name1.
+
+UPDATE kna1 CLIENT SPECIFIED FROM ls_customer.
+
+" ✅ CORRECT: CLIENT SPECIFIED with DELETE
+" Scenario: Delete data from specific client
+DELETE FROM kna1 CLIENT SPECIFIED
+  WHERE mandt = lv_target_client
+    AND kunnr = lv_customer_id.
+
+" ✅ CORRECT: CLIENT SPECIFIED with INSERT
+" Scenario: Insert data into specific client
+ls_customer-mandt = lv_target_client.
+ls_customer-kunnr = lv_customer_id.
+ls_customer-name1 = lv_name1.
+
+INSERT kna1 CLIENT SPECIFIED FROM ls_customer.
+```
+
+**Authorization Check Pattern:**
+
+```abap
+METHOD access_cross_client_data.
+  " Check authorization before using CLIENT SPECIFIED
+  AUTHORITY-CHECK OBJECT 'S_CLIENT_IMP'
+    ID 'CLNT' DUMMY
+    ID 'ACTVT' FIELD '01'.
+
+  IF sy-subrc <> 0.
+    RAISE EXCEPTION TYPE zcx_authorization_error
+      EXPORTING
+        textid = zcx_authorization_error=>no_cross_client_auth
+        mv_message = 'Not authorized for cross-client access'.
+  ENDIF.
+
+  " Proceed with CLIENT SPECIFIED access
+  SELECT kunnr name1
+    FROM kna1 CLIENT SPECIFIED
+    INTO TABLE lt_customers
+    WHERE mandt = lv_target_client
+      AND kunnr = lv_customer_id.
+ENDMETHOD.
+```
+
+**Best Practices for CLIENT SPECIFIED:**
+1. **Always check authorization** before using CLIENT SPECIFIED
+2. **Document the business reason** in code comments
+3. **Use constants** for client values instead of hardcoding
+4. **Validate client values** before using them
+5. **Log cross-client access** for audit purposes
+6. **Restrict to specific methods** - don't use globally
+7. **Consider performance** - cross-client queries may be slower
+8. **Handle errors** - CLIENT SPECIFIED operations can fail if client doesn't exist
+
+**Example: Complete Implementation with Authorization:**
+
+```abap
+" Constants for client values
+CONSTANTS: gc_client_000 TYPE mandt VALUE '000',
+           gc_client_100 TYPE mandt VALUE '100'.
+
+" Method with proper authorization and error handling
+METHOD get_customer_from_client.
+  DATA: ls_customer TYPE kna1,
+        lx_error TYPE REF TO zcx_authorization_error.
+
+  " Check authorization
+  AUTHORITY-CHECK OBJECT 'S_CLIENT_IMP'
+    ID 'CLNT' DUMMY
+    ID 'ACTVT' FIELD '01'.
+
+  IF sy-subrc <> 0.
+    RAISE EXCEPTION TYPE zcx_authorization_error
+      EXPORTING
+        textid = zcx_authorization_error=>no_cross_client_auth.
+  ENDIF.
+
+  " Validate client parameter
+  IF iv_client_id IS INITIAL.
+    RAISE EXCEPTION TYPE zcx_validation_error
+      EXPORTING
+        mv_message = 'Client ID is mandatory'.
+  ENDIF.
+
+  " Access data from specified client
+  SELECT SINGLE kunnr name1 name2
+    FROM kna1 CLIENT SPECIFIED
+    INTO ls_customer
+    WHERE mandt = iv_client_id
+      AND kunnr = iv_customer_id.
+
+  IF sy-subrc <> 0.
+    RAISE EXCEPTION TYPE zcx_customer_not_found
+      EXPORTING
+        mv_customer_id = iv_customer_id
+        mv_client_id = iv_client_id.
+  ENDIF.
+
+  " Log cross-client access for audit
+  PERFORM log_cross_client_access
+    USING iv_client_id iv_customer_id sy-uname.
+
+  es_customer = ls_customer.
+ENDMETHOD.
+```
+
+**When NOT to Use CLIENT SPECIFIED:**
+- ❌ Regular business operations (use automatic client filtering)
+- ❌ Standard reports and transactions
+- ❌ User-facing applications
+- ❌ When you only need current client data
+- ❌ Without proper authorization
+
+## SELECT Statement Patterns
+
+### SELECT SINGLE
+Use for retrieving exactly one record.
+
+**CRITICAL RESTRICTIONS:**
+- **SELECT SINGLE cannot use ORDER BY clause** - This causes syntax errors
+- If you need to order and get the latest/first record, use `SELECT ... INTO ... ORDER BY ... UP TO 1 ROWS` instead
+- SELECT SINGLE retrieves exactly one record based on WHERE conditions only
+- Use WHERE clause to ensure you get the correct record
+
+```abap
+" ✅ Good: SELECT SINGLE with WHERE clause
+DATA: ls_customer TYPE kna1.
+
+SELECT SINGLE kunnr name1 name2 ort01
+  FROM kna1
+  INTO ls_customer
+  WHERE kunnr = lv_customer_id
+    AND bukrs = lv_company_code.
+
+IF sy-subrc <> 0.
+  " Handle not found
+ENDIF.
+
+" ❌ FORBIDDEN: SELECT SINGLE without WHERE (selects first record)
+SELECT SINGLE * FROM kna1 INTO ls_customer.
+
+" ❌ FORBIDDEN: SELECT SINGLE with ORDER BY (syntax error)
+SELECT SINGLE kunnr name1
+  FROM kna1
+  INTO ls_customer
+  WHERE kunnr = lv_customer_id
+  ORDER BY erdat DESCENDING.
+
+" ✅ CORRECT: Use SELECT with ORDER BY and UP TO 1 ROWS instead
+" Scenario: Get latest payroll record for employee
+DATA: ls_payroll TYPE zps_emp_payroll.
+
+SELECT mandt emp_id salary_month salary_year basic
+  FROM zps_emp_payroll
+  INTO ls_payroll
+  WHERE emp_id = lv_emp_id
+  ORDER BY salary_year DESCENDING salary_month DESCENDING
+  UP TO 1 ROWS.
+
+IF sy-subrc <> 0.
+  " Handle not found
+ENDIF.
+```
+
+### SELECT INTO TABLE
+Use for retrieving multiple records.
+
+```abap
+" Good: Field list with WHERE clause and limit
+DATA: lt_customers TYPE STANDARD TABLE OF kna1.
+
+SELECT kunnr name1 name2 ort01 pstlz land1
+  FROM kna1
+  INTO TABLE lt_customers
+  WHERE kunnr IN s_kunnr
+    AND bukrs = p_bukrs
+    AND land1 = lv_country
+  UP TO 10000 ROWS.
+
+IF sy-subrc <> 0.
+  " Handle no records found
+ENDIF.
+
+" Bad: SELECT * without WHERE
+SELECT * FROM kna1 INTO TABLE lt_customers.
+```
+
+### SELECT with CURSOR
+Use for processing large datasets in chunks.
+
+```abap
+DATA: lt_customers TYPE STANDARD TABLE OF kna1,
+      ls_customer TYPE kna1,
+      lv_cursor TYPE cursor,
+      lv_package_size TYPE i VALUE 1000.
+
+OPEN CURSOR WITH HOLD lv_cursor FOR
+  SELECT kunnr name1 name2
+    FROM kna1
+    WHERE bukrs = p_bukrs
+      AND erdat >= lv_date_from.
+
+DO.
+  FETCH NEXT CURSOR lv_cursor
+    INTO TABLE lt_customers
+    PACKAGE SIZE lv_package_size.
+
+  IF sy-subrc <> 0 OR lines( lt_customers ) = 0.
+    EXIT.
+  ENDIF.
+
+  " Process package
+  LOOP AT lt_customers INTO ls_customer.
+    " Process each record
+  ENDLOOP.
+
+  CLEAR lt_customers.
+ENDDO.
+
+CLOSE CURSOR lv_cursor.
+```
+
+## JOIN Operations
+
+### INNER JOIN
+Use for combining related data from multiple tables.
+
+```abap
+" Good: Explicit JOIN with field lists
+DATA: lt_data TYPE STANDARD TABLE OF kna1.
+
+SELECT k~kunnr k~name1 k~ort01 v~vbeln v~erdat
+  FROM kna1 AS k
+  INNER JOIN vbak AS v
+    ON k~kunnr = v~kunnr
+  INTO TABLE lt_data
+  WHERE k~bukrs = p_bukrs
+    AND v~erdat >= lv_date_from
+  UP TO 10000 ROWS.
+
+" Bad: Nested SELECT loops
+LOOP AT lt_customers INTO ls_customer.
+  SELECT * FROM vbak
+    INTO TABLE lt_orders
+    WHERE kunnr = ls_customer-kunnr.
+  " Process orders
+ENDLOOP.
+```
+
+### LEFT OUTER JOIN
+Use when you need all records from left table.
+
+```abap
+DATA: lt_data TYPE STANDARD TABLE OF kna1.
+
+SELECT k~kunnr k~name1 v~vbeln v~erdat
+  FROM kna1 AS k
+  LEFT OUTER JOIN vbak AS v
+    ON k~kunnr = v~kunnr
+  INTO TABLE lt_data
+  WHERE k~bukrs = p_bukrs
+  UP TO 10000 ROWS.
+```
+
+## FOR ALL ENTRIES
+
+### Usage Guidelines
+- **Check if table is not empty** before using FOR ALL ENTRIES
+- **Remove duplicates** from the internal table
+- **Use appropriate key fields** for performance
+- **Limit the number of entries** (typically < 1000)
+
+```abap
+" Good: FOR ALL ENTRIES with empty check and deduplication
+IF lt_customer_keys IS NOT INITIAL.
+  " Remove duplicates
+  SORT lt_customer_keys BY kunnr bukrs.
+  DELETE ADJACENT DUPLICATES FROM lt_customer_keys
+    COMPARING kunnr bukrs.
+
+  SELECT kunnr name1 name2 ort01
+    FROM kna1
+    INTO TABLE lt_customers
+    FOR ALL ENTRIES IN lt_customer_keys
+    WHERE kunnr = lt_customer_keys-kunnr
+      AND bukrs = lt_customer_keys-bukrs.
+ENDIF.
+
+" Bad: FOR ALL ENTRIES without empty check
+SELECT * FROM kna1
+  INTO TABLE lt_customers
+  FOR ALL ENTRIES IN lt_customer_keys
+  WHERE kunnr = lt_customer_keys-kunnr.
+```
+
+## Performance Optimization
+
+### Index Usage
+- Design WHERE clauses to use secondary indexes
+- Check table indexes in SE11/SE16
+- Use index fields in WHERE clause order
+- Avoid functions on indexed fields in WHERE clause
+
+```abap
+" Good: Uses index on KUNNR, BUKRS
+SELECT kunnr name1
+  FROM kna1
+  INTO TABLE lt_customers
+  WHERE kunnr = lv_customer_id
+    AND bukrs = lv_company_code.
+
+" Bad: Function on indexed field prevents index usage
+SELECT kunnr name1
+  FROM kna1
+  INTO TABLE lt_customers
+  WHERE upper( kunnr ) = lv_customer_id.
+```
+
+### Table Type Selection
+
+#### STANDARD TABLE
+- Use for unsorted data
+- Fast APPEND operations
+- Use READ TABLE with TRANSPORTING NO FIELDS for existence checks
+- Use SORT before BINARY SEARCH
+
+```abap
+DATA: lt_customers TYPE STANDARD TABLE OF kna1.
+
+" Append
+APPEND ls_customer TO lt_customers.
+
+" Existence check
+READ TABLE lt_customers TRANSPORTING NO FIELDS
+  WITH KEY kunnr = lv_customer_id.
+
+IF sy-subrc = 0.
+  " Exists
+ENDIF.
+
+" Binary search (requires sorted table)
+SORT lt_customers BY kunnr.
+READ TABLE lt_customers BINARY SEARCH
+  WITH KEY kunnr = lv_customer_id
+  INTO ls_customer.
+```
+
+#### SORTED TABLE
+- Use when data needs to be sorted
+- Fast READ operations with key
+- Automatic sorting on INSERT
+- Use for frequent lookups
+
+```abap
+DATA: lt_customers TYPE SORTED TABLE OF kna1
+                    WITH UNIQUE KEY kunnr bukrs.
+
+" Insert (automatically sorted)
+INSERT ls_customer INTO TABLE lt_customers.
+
+" Fast read
+READ TABLE lt_customers
+  WITH KEY kunnr = lv_customer_id
+           bukrs = lv_company_code
+  INTO ls_customer.
+```
+
+#### HASHED TABLE
+- Use for very large datasets with key lookups
+- Fastest READ operations
+- Requires unique key
+- Use for lookup tables
+
+```abap
+DATA: lt_customers TYPE HASHED TABLE OF kna1
+                    WITH UNIQUE KEY kunnr.
+
+" Insert
+INSERT ls_customer INTO TABLE lt_customers.
+
+" Very fast read
+READ TABLE lt_customers
+  WITH TABLE KEY kunnr = lv_customer_id
+  INTO ls_customer.
+```
+
+### Limiting Result Sets
+
+```abap
+" Always use UP TO N ROWS for large tables
+SELECT kunnr name1
+  FROM kna1
+  INTO TABLE lt_customers
+  WHERE bukrs = p_bukrs
+  UP TO 10000 ROWS.
+
+" Check if more records exist
+IF sy-dbcnt = 10000.
+  MESSAGE w001(z_customer_msg) WITH 'Results limited to 10000 records'.
+ENDIF.
+```
+
+### Field Symbols for Performance
+
+```abap
+" Use field symbols for performance-critical loops
+FIELD-SYMBOLS: <fs_customer> TYPE kna1.
+
+LOOP AT lt_customers ASSIGNING <fs_customer>.
+  CONCATENATE <fs_customer>-name1 'UPDATED' INTO <fs_customer>-name1 SEPARATED BY space.
+ENDLOOP.
+
+" Avoid work area when possible
+LOOP AT lt_customers INTO ls_customer.
+  CONCATENATE ls_customer-name1 'UPDATED' INTO ls_customer-name1 SEPARATED BY space.
+  MODIFY lt_customers FROM ls_customer.
+ENDLOOP.
+```
+
+## Database Modification Operations
+
+### INSERT
+
+```abap
+" Single record
+INSERT kna1 FROM ls_customer.
+
+IF sy-subrc <> 0.
+  " Handle error
+  MESSAGE e001(z_customer_msg) WITH 'Insert failed'.
+ENDIF.
+
+" Multiple records
+INSERT kna1 FROM TABLE lt_customers.
+
+IF sy-subrc <> 0.
+  " Handle error
+ENDIF.
+
+" Check number of inserted records
+DATA: lv_inserted TYPE i.
+lv_inserted = sy-dbcnt.
+```
+
+### UPDATE
+
+```abap
+" Single record
+UPDATE kna1 FROM ls_customer.
+
+IF sy-subrc <> 0.
+  " Handle error
+ENDIF.
+
+" Multiple records
+UPDATE kna1 FROM TABLE lt_customers.
+
+" Update specific fields
+UPDATE kna1 SET name1 = lv_name1
+              name2 = lv_name2
+  WHERE kunnr = lv_customer_id.
+
+" Check number of updated records
+IF sy-dbcnt = 0.
+  MESSAGE w001(z_customer_msg) WITH 'No records updated'.
+ENDIF.
+```
+
+### MODIFY
+
+```abap
+" MODIFY inserts if not exists, updates if exists
+MODIFY kna1 FROM ls_customer.
+
+" Multiple records
+MODIFY kna1 FROM TABLE lt_customers.
+```
+
+### DELETE
+
+```abap
+" Single record
+DELETE FROM kna1 WHERE kunnr = lv_customer_id.
+
+" Multiple records
+DELETE FROM kna1 WHERE kunnr IN s_kunnr
+                    AND bukrs = p_bukrs.
+
+" Check number of deleted records
+IF sy-dbcnt = 0.
+  MESSAGE w001(z_customer_msg) WITH 'No records deleted'.
+ENDIF.
+```
+
+## Transaction Management
+
+### COMMIT and ROLLBACK
+
+```abap
+" Commit after successful operations
+DATA: lx_error TYPE REF TO cx_root.
+
+TRY.
+    UPDATE kna1 FROM ls_customer.
+    IF sy-subrc = 0.
+      COMMIT WORK.
+      MESSAGE s001(z_customer_msg) WITH 'Customer updated successfully'.
+    ELSE.
+      ROLLBACK WORK.
+      MESSAGE e002(z_customer_msg) WITH 'Update failed'.
+    ENDIF.
+  CATCH cx_root INTO lx_error.
+    ROLLBACK WORK.
+    MESSAGE lx_error->get_text( ) TYPE 'E'.
+ENDTRY.
+```
+
+### Database Locks
+
+```abap
+" Use ENQUEUE/DEQUEUE for logical locks
+CALL FUNCTION 'ENQUEUE_EZ_CUSTOMER'
+  EXPORTING
+    kunnr = lv_customer_id
+  EXCEPTIONS
+    foreign_lock = 1
+    system_failure = 2
+    OTHERS = 3.
+
+IF sy-subrc <> 0.
+  MESSAGE e001(z_customer_msg) WITH 'Customer is locked by another user'.
+  RETURN.
+ENDIF.
+
+" Perform operations
+UPDATE kna1 FROM ls_customer.
+
+" Release lock
+CALL FUNCTION 'DEQUEUE_EZ_CUSTOMER'
+  EXPORTING
+    kunnr = lv_customer_id.
+```
+
+## Performance Monitoring
+
+### Runtime Analysis
+- Use SAT (Runtime Analysis) for performance analysis
+- Monitor database access time
+- Identify N+1 query problems
+- Optimize slow queries
+
+### Best Practices Checklist
+- [ ] **NEVER use Native SQL (EXEC SQL) - Open SQL only**
+- [ ] **NEVER specify MANDT in WHERE clauses (without CLIENT SPECIFIED)**
+- [ ] **CLIENT SPECIFIED only used when cross-client access is required**
+- [ ] **Authorization checked before using CLIENT SPECIFIED**
+- [ ] **NEVER use ORDER BY with SELECT SINGLE** - Use SELECT with UP TO 1 ROWS instead
+- [ ] MANDT is set to sy-mandt before INSERT/UPDATE/MODIFY operations
+- [ ] All SELECT statements have WHERE clauses
+- [ ] Field lists are used (no SELECT *)
+- [ ] UP TO N ROWS is used for large result sets
+- [ ] Appropriate table types are used
+- [ ] FOR ALL ENTRIES has empty check
+- [ ] JOINs are used instead of nested loops
+- [ ] Indexes are utilized in WHERE clauses
+- [ ] SY-SUBRC is checked after all operations
+- [ ] Transactions are properly committed/rolled back
+- [ ] Database locks are used when needed

@@ -1,0 +1,338 @@
+---
+description: Standards for ABAP reports and function modules in ECC 6.0 EHP 6
+alwaysApply: false
+globs: ["**/*.abap", "**/*.reps", "**/*.fugr"]
+---
+
+# Reports and Function Modules
+
+## Target Environment
+- **SAP ECC 6.0 EHP 6**
+- **ABAP 731 SP0008**
+- Production-ready, enterprise-grade code
+
+## Reports (REPORT Programs)
+
+### Structure and Organization
+
+#### Required Components
+1. **REPORT statement** with program name
+2. **Program description** in comment block
+3. **Type pools** (if needed)
+4. **Global data declarations** (all at top)
+5. **Selection screen** (PARAMETERS, SELECT-OPTIONS)
+6. **AT SELECTION-SCREEN** events for validation
+7. **START-OF-SELECTION** for main logic
+8. **FORM routines** or **local classes** for modularization
+9. **Error handling** throughout
+10. **Authorization checks** before data access
+
+#### Standard Report Template
+```abap
+REPORT zr_customer_report.
+
+*----------------------------------------------------------------------*
+* Program: ZR_CUSTOMER_REPORT
+* Description: Customer master data report with selection criteria
+* Author: Development Team
+* Date: YYYY-MM-DD
+* Transport: <Transport Number>
+*----------------------------------------------------------------------*
+* Change History:
+* Date       | Author      | Description
+* YYYY-MM-DD | Name        | Initial creation
+*----------------------------------------------------------------------*
+
+" Type pools
+TYPE-POOLS: slis.
+
+" Global data declarations
+DATA: gv_customer_id TYPE kunnr,
+      gv_company_code TYPE bukrs,
+      lt_customers TYPE STANDARD TABLE OF kna1,
+      ls_customer TYPE kna1,
+      lo_alv TYPE REF TO cl_salv_table.
+
+" Selection screen
+SELECTION-SCREEN BEGIN OF BLOCK b01 WITH FRAME TITLE TEXT-001.
+  PARAMETERS: p_bukrs TYPE bukrs OBLIGATORY.
+  SELECT-OPTIONS: s_kunnr FOR gv_customer_id.
+SELECTION-SCREEN END OF BLOCK b01.
+
+" Authorization check
+AT SELECTION-SCREEN.
+  PERFORM check_authorization.
+
+" Input validation
+AT SELECTION-SCREEN ON p_bukrs.
+  PERFORM validate_company_code USING p_bukrs.
+
+" Main processing
+START-OF-SELECTION.
+  PERFORM get_customer_data.
+  PERFORM display_results.
+
+" Form routines
+FORM check_authorization.
+  AUTHORITY-CHECK OBJECT 'F_BKPF_BUK'
+    ID 'ACTVT' FIELD '03'
+    ID 'BUKRS' FIELD p_bukrs.
+  
+  IF sy-subrc <> 0.
+    MESSAGE e001(z_customer_msg) WITH p_bukrs.
+  ENDIF.
+ENDFORM.
+
+FORM validate_company_code USING iv_bukrs TYPE bukrs.
+  DATA: lv_bukrs TYPE bukrs.
+  
+  SELECT SINGLE bukrs FROM t001
+    INTO lv_bukrs
+    WHERE bukrs = iv_bukrs.
+  
+  IF sy-subrc <> 0.
+    MESSAGE e002(z_customer_msg) WITH iv_bukrs.
+  ENDIF.
+ENDFORM.
+
+FORM get_customer_data.
+  CLEAR: lt_customers.
+  
+  SELECT kunnr name1 name2 ort01 pstlz land1
+    FROM kna1
+    INTO TABLE lt_customers
+    WHERE kunnr IN s_kunnr
+      AND bukrs = p_bukrs
+    UP TO 10000 ROWS.
+  
+  IF sy-subrc <> 0.
+    MESSAGE i003(z_customer_msg).
+    RETURN.
+  ENDIF.
+  
+  MESSAGE s004(z_customer_msg) WITH sy-dbcnt.
+ENDFORM.
+
+FORM display_results.
+  DATA: lx_error TYPE REF TO cx_salv_msg.
+
+  TRY.
+      cl_salv_table=>factory(
+        IMPORTING
+          r_salv_table = lo_alv
+        CHANGING
+          t_table = lt_customers
+      ).
+      
+      lo_alv->display( ).
+    CATCH cx_salv_msg INTO lx_error.
+      MESSAGE lx_error->get_text( ) TYPE 'E'.
+  ENDTRY.
+ENDFORM.
+```
+
+### Report Best Practices
+
+#### Selection Screen
+- Use `SELECT-OPTIONS` instead of `PARAMETERS` for ranges (more flexible)
+- Mark mandatory fields with `OBLIGATORY`
+- Group related fields with `SELECTION-SCREEN BEGIN OF BLOCK`
+- Use text elements (TEXT-001) instead of hardcoded labels
+- Provide default values when appropriate
+- Use `MEMORY ID` for persisting user selections
+
+#### Data Retrieval
+- **NEVER use Native SQL** - Always use Open SQL (ABAP SQL) only
+- **Always use WHERE clauses** in SELECT statements
+- **Use field lists** (avoid SELECT *)
+- **Use UP TO N ROWS** to limit result sets
+- **Check SY-SUBRC** after every database operation
+- **Use SELECT SINGLE** for single record retrieval
+- **Use SELECT ... INTO TABLE** for multiple records
+- **Avoid nested SELECT loops** (use JOIN or FOR ALL ENTRIES)
+
+#### Error Handling
+- Check SY-SUBRC after all database operations
+- Use appropriate message types (E, W, I, S)
+- Use message classes (not hardcoded messages)
+- Provide meaningful error messages
+- Log errors for debugging
+- Handle exceptions with TRY-CATCH
+
+#### Performance
+- Limit result sets with UP TO N ROWS
+- Use appropriate table types
+- Use secondary indexes when available
+- Avoid SELECT * - specify field lists
+- Use FOR ALL ENTRIES carefully (check if table is not empty first)
+- Use BINARY SEARCH for sorted tables
+
+#### Authorization
+- Always check authorization before data access
+- Use AUTHORITY-CHECK with appropriate object and fields
+- Check authorization in AT SELECTION-SCREEN
+- Provide clear error messages for authorization failures
+
+## Function Modules
+
+### Structure and Organization
+
+#### Required Components
+1. **Function module name** with Z_ or Y_ prefix
+2. **Function group** assignment
+3. **Parameter documentation** in comment block
+4. **IMPORTING parameters** for inputs
+5. **EXPORTING parameters** for outputs
+6. **CHANGING parameters** (use sparingly)
+7. **TABLES parameters** (legacy - avoid for new code)
+8. **EXCEPTIONS** for error handling
+9. **Error handling** throughout
+10. **SY-SUBRC checks** after operations
+
+#### Standard Function Module Template
+```abap
+FUNCTION z_get_customer_data.
+*"----------------------------------------------------------------------
+*"*"Local Interface:
+*"  IMPORTING
+*"     VALUE(iv_customer_id) TYPE kunnr OBLIGATORY
+*"     VALUE(iv_company_code) TYPE bukrs OBLIGATORY
+*"     VALUE(iv_language) TYPE spras DEFAULT sy-langu
+*"  EXPORTING
+*"     VALUE(es_customer) TYPE kna1
+*"     VALUE(ev_success) TYPE abap_bool
+*"  EXCEPTIONS
+*"     CUSTOMER_NOT_FOUND
+*"     AUTHORIZATION_FAILED
+*"     SYSTEM_ERROR
+*"----------------------------------------------------------------------
+*" Description: Retrieves customer master data
+*" Author: Development Team
+*" Date: YYYY-MM-DD
+*"----------------------------------------------------------------------
+
+  DATA: lv_customer_id TYPE kunnr,
+        lv_bukrs TYPE bukrs.
+
+  " Input validation
+  IF iv_customer_id IS INITIAL.
+    MESSAGE e001(z_customer_msg) RAISING customer_not_found.
+  ENDIF.
+
+  IF iv_company_code IS INITIAL.
+    MESSAGE e002(z_customer_msg) RAISING system_error.
+  ENDIF.
+
+  " Authorization check
+  AUTHORITY-CHECK OBJECT 'F_BKPF_BUK'
+    ID 'ACTVT' FIELD '03'
+    ID 'BUKRS' FIELD iv_company_code.
+  
+  IF sy-subrc <> 0.
+    MESSAGE e003(z_customer_msg) WITH iv_company_code
+      RAISING authorization_failed.
+  ENDIF.
+
+  " Data retrieval
+  SELECT SINGLE kunnr name1 name2 ort01 pstlz land1
+    FROM kna1
+    INTO CORRESPONDING FIELDS OF es_customer
+    WHERE kunnr = iv_customer_id
+      AND bukrs = iv_company_code
+      AND spras = iv_language.
+  
+  IF sy-subrc <> 0.
+    MESSAGE e004(z_customer_msg) WITH iv_customer_id
+      RAISING customer_not_found.
+  ENDIF.
+
+  " Success
+  ev_success = abap_true.
+
+ENDFUNCTION.
+```
+
+### Function Module Best Practices
+
+#### Parameter Design
+- **IMPORTING**: Use for all input parameters
+- **EXPORTING**: Use for all output parameters
+- **CHANGING**: Use sparingly (only when parameter is both input and output)
+- **TABLES**: Avoid for new code (legacy support only)
+- Mark mandatory parameters with `OBLIGATORY`
+- Provide default values when appropriate
+- Use `VALUE` for pass-by-value (preferred)
+- Use descriptive parameter names with prefixes (iv_, ev_, cv_)
+
+#### Error Handling
+- Use EXCEPTIONS for error conditions
+- Always check SY-SUBRC after database operations
+- Use `MESSAGE ... RAISING exception_name` for errors
+- Provide meaningful exception names
+- Document all exceptions in function module documentation
+- Return success flag in EXPORTING parameter
+
+#### Single Responsibility
+- Keep function modules focused on single responsibility
+- One function module = one logical operation
+- Avoid global variables in function groups
+- Use local variables within function module
+- Keep function modules small and maintainable
+
+#### Documentation
+- Document all parameters with descriptions
+- Document all exceptions with conditions
+- Include usage examples in comments
+- Document business logic for complex operations
+- Keep documentation up-to-date
+
+#### Calling Function Modules
+- Always check SY-SUBRC after function module calls
+- Handle all exceptions appropriately
+- Use TRY-CATCH when calling from classes
+- Validate input parameters before calling
+- Check output parameters for validity
+
+```abap
+" Calling function module
+CALL FUNCTION 'Z_GET_CUSTOMER_DATA'
+  EXPORTING
+    iv_customer_id = lv_customer_id
+    iv_company_code = p_bukrs
+  IMPORTING
+    es_customer = ls_customer
+    ev_success = lv_success
+  EXCEPTIONS
+    customer_not_found = 1
+    authorization_failed = 2
+    system_error = 3
+    OTHERS = 4.
+
+CASE sy-subrc.
+  WHEN 0.
+    " Success - process ls_customer
+  WHEN 1.
+    MESSAGE e001(z_customer_msg) WITH lv_customer_id.
+  WHEN 2.
+    MESSAGE e002(z_customer_msg) WITH p_bukrs.
+  WHEN 3.
+    MESSAGE e003(z_customer_msg).
+  WHEN OTHERS.
+    MESSAGE e004(z_customer_msg).
+ENDCASE.
+```
+
+## Migration from Function Modules to Classes
+
+### When to Use Classes vs Function Modules
+- **Use Classes** for all new development
+- **Use Function Modules** only for:
+  - RFC-enabled interfaces
+  - Legacy system integration
+  - Backward compatibility requirements
+  - Standard SAP enhancement points (BAdIs, User Exits)
+
+### Migration Strategy
+- New code: Always use classes
+- Existing function modules: Refactor to classes when modifying
+- RFC interfaces: Keep as function modules or use class-based RFC
